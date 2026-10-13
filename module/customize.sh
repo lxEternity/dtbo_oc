@@ -86,11 +86,10 @@ case "$DEVICE" in
     op15|ace6) DEF_HZ=185; CHOICES="185/195" ;;
     gt8)       DEF_HZ=185; CHOICES="144/165/185/195" ;;
     gt7p)      DEF_HZ=144; CHOICES="130/142/144" ;;
+    gt7s)      DEF_HZ=185; CHOICES="144/165/185" ;;
+    gt8p)      DEF_HZ=185; CHOICES="165/185" ;;
+    ace6t)     DEF_HZ=185; CHOICES="185" ;;
     op11)      DEF_HZ=0;   CHOICES="" ;;   # 一加11 不可超频
-    gt7)
-        ui_print "! 真我 GT7 Pro (标准版) 暂未适配, 模块会安装但开机不会修改任何内容"
-        DEF_HZ=0; CHOICES=""
-        ;;
     *)
         ui_print "! 无法识别机型 (DEVICE=$DEVICE)"
         ui_print "! 模块仍将安装, 但开机 service.sh 会再次校验并中止"
@@ -100,9 +99,6 @@ esac
 [ -n "$DEVNAME" ] && ui_print "- 机型识别: $DEVNAME ($DEVICE)"
 if [ "$DEVICE" = "op11" ]; then
     ui_print "- 本机型不支持刷新率超频, 仅电池/充电方案可用"
-fi
-if [ "$DEVICE" = "gt7" ]; then
-    ui_print "- 本机型暂未适配, 开机 service.sh 会自动中止 (不做任何修改)"
 fi
 
 # ---------------- 按键输入: 音量上=up 音量下=down 电源键=select ----------------
@@ -214,10 +210,23 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
         ui_choose "电池/充电方案:" "保持原版电池|GT7P 竞速版解容 (满充4.55V/关机2.85V/解除充电限流)" "$GT_INIT"
         BATTERY=$([ "$SEL" = "1" ] && echo 6 || echo 0)
     else
-        BAT_MENU="保持原版电池|解除充电限流|解除充电限流 + 关机电压2800 (电池解容)"
-        [ "$BATT_OK" = "1" ] && BAT_MENU="$BAT_MENU|6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)|6100mAh 魔改电池 + 解除充电限流|原版电池 + 关机电压2800 (电池解容)"
-        ui_choose "电池/充电方案:" "$BAT_MENU" "${BATTERY:-0}"
-        BATTERY=$SEL
+        BAT_MENU="保持原版电池|解除充电限流|解除充电限流 + 关机电压2800 (电池解容)|原版电池 + 关机电压2800 (电池解容)"
+        BAT_MODES="0 1 2 5"
+        if [ "$BATT_OK" = "1" ]; then
+            BAT_MENU="$BAT_MENU|6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)|6100mAh 魔改电池 + 解除充电限流"
+            BAT_MODES="$BAT_MODES 3 4"
+        fi
+        INIT=0; i=0
+        for m in $BAT_MODES; do
+            [ "$m" = "${BATTERY:-0}" ] && INIT=$i
+            i=$((i+1))
+        done
+        ui_choose "电池/充电方案:" "$BAT_MENU" "$INIT"
+        i=0
+        for m in $BAT_MODES; do
+            [ "$i" = "$SEL" ] && BATTERY=$m
+            i=$((i+1))
+        done
     fi
     if [ "$BATT_OK" = "1" ] && { [ "$BATTERY" = "3" ] || [ "$BATTERY" = "4" ]; }; then
         ui_print "  !! 非魔改电池勿选, 可能导致过充/鼓包 !!"
@@ -247,8 +256,8 @@ fi
 case "$BATTERY" in 0|1|2|3|4|5|6) ;; *) BATTERY=0 ;; esac
 if [ "$BATT_OK" != "1" ]; then
     case "$BATTERY" in
-        3|4|5)
-            ui_print "- 魔改/解容电池选项仅 ACE2Pro/一加11/一加12 支持, 已重置为原版"
+        3|4)
+            ui_print "- 魔改电池选项仅 ACE2Pro/一加11/一加12 支持, 已重置为原版"
             BATTERY=0
             ;;
     esac

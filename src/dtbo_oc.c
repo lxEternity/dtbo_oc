@@ -847,8 +847,8 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             if (!t->is_dynamic) continue;
             if (!strstr(t->name, "sa_fhd")) continue;
         } else if (pass == 0 && t->is_dynamic) continue;
-        /* 动态基准回退时排除纯数字名节点 (timing@0 等 dyn-clk 占位索引, 非显示时序) */
-        if (t->is_dynamic && (t->name[0] >= '0' && t->name[0] <= '9')) continue;
+        /* 纯数字名节点 (timing@0/1 等) 为 sim/bridge 面板或 dyn-clk 占位索引, 不作克隆基准 */
+        if (t->name[0] >= '0' && t->name[0] <= '9') continue;
         /* 提供 stock 节点名集合时, 仅 stock 中存在的节点可作为克隆基准
            (排除本模块或其他工具先前追加的 OC 节点, 保证插值模型始终基于原厂时序) */
         if (stock_n >= 0) {
@@ -1119,8 +1119,9 @@ typedef struct {
              2=解除充电限流+关机电压2800 电池解容 (全机型)
              3=6100mAh 魔改电池 (容量6100/关机3.0V/1%3.05V/满充4.54V)
              4=6100mAh 魔改电池+解除充电限流
-             5=原版电池+关机电压2800 电池解容 (仅带电池容量节点机型:
-                ACE2Pro/一加11/一加12)
+             5=原版电池+关机电压2800 电池解容 (全机型:
+                老平台替换/插入 qcom,vbatt_power_off,
+                新平台 gt7s/gt8p/ace6t/gt7p 替换 oplus,chg_shutdown_max_mv)
              6=GT7 Pro 竞速版解容 (满充4.55V/关机2.85V/解除充电限流):
                 pps/ufcs full_ffc_vbat 与 normal 策略表末段 -> 4550mV,
                 chg_shutdown_max_mv/vbat_uv_thr_mv -> 2850mV,
@@ -1265,11 +1266,12 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
             if (verbose) fprintf(stderr, "[BATT] 删除限流节点: %s\n", pn);
             continue;
         }
-        /* 关机电压 2800 (电池解容): 已有节点直接替换为 2800 (无论原值) */
-        if (v2800 && !strcmp(pn, "qcom,vbatt_power_off")) {
+        /* 关机电压 2800 (电池解容): 已有节点直接替换为 2800 (无论原值)
+           老平台 qcom,vbatt_power_off / 新平台 (gt7s/gt8p/ace6t 等) oplus,chg_shutdown_max_mv */
+        if (v2800 && (!strcmp(pn, "qcom,vbatt_power_off") || !strcmp(pn, "oplus,chg_shutdown_max_mv"))) {
             char body[256];
             char *ws = lead_ws(line);
-            snprintf(body, sizeof(body), "%sqcom,vbatt_power_off = <0x%x>;", ws, BATT_VOFF_2800);
+            snprintf(body, sizeof(body), "%s%s = <0x%x>;", ws, pn, BATT_VOFF_2800);
             free(ws);
             free(d->lines[i]);
             d->lines[i] = xstrdup(body);
@@ -1456,7 +1458,7 @@ static int verify_battery_dts(Dts *d, const BattCfg *bc) {
     int cap_ok = 0, off_ok = 0, p1_ok = 0, bad_removed = 0;
     int off_seen = 0, p1_seen = 0;
     int oplus_full_seen = 0, oplus_full_ok = 0;
-    int v2800_ok = 0, v2800_bad = 0;
+    int v2800_ok = 0, v2800_bad = 0, v2800_seen = 0;
     int gt7p_ffc_ok = 0, gt7p_ffc_bad = 0;
     int gt7p_voff_ok = 0, gt7p_voff_bad = 0;
     const int modify    = BATT_MODIFY(bc->mode);
@@ -1481,9 +1483,11 @@ static int verify_battery_dts(Dts *d, const BattCfg *bc) {
             uint32_t v = parse_u32_from_val(val);
             if (modify) { if (v == BATT_CAP_NEW) cap_ok = 1; }
             else cap_ok = 1;   /* 非魔改: 容量保持原厂 (5000/5400 等机型各异) */
-        } else if (!strcmp(pn, "qcom,vbatt_power_off")) {
+        } else if (!strcmp(pn, "qcom,vbatt_power_off") ||
+                   (v2800 && !strcmp(pn, "oplus,chg_shutdown_max_mv"))) {
             uint32_t v = parse_u32_from_val(val);
             if (v2800) {
+                v2800_seen = 1;
                 if (v == BATT_VOFF_2800) v2800_ok = 1;
                 else v2800_bad++;
             } else if (modify) {
@@ -1512,7 +1516,9 @@ static int verify_battery_dts(Dts *d, const BattCfg *bc) {
             cap_ok, off_ok, off_seen, p1_ok, p1_seen, oplus_full_ok, oplus_full_seen);
         return -1;
     }
-    if (v2800 && (!v2800_ok || v2800_bad)) {
+    if (v2800 && v2800_seen && (!v2800_ok || v2800_bad)) {
+        /* 该 entry 存在关机电压节点才校验 (部分 entry 完全无电池节点, 跳过;
+           全局零命中由 cmd_patch 末尾统一报错) */
         fprintf(stderr, "[VERIFY][FAIL] 关机电压2800校验失败 (存在=%d 异常值=%d)\n", v2800_ok, v2800_bad);
         return -1;
     }
@@ -1637,9 +1643,18 @@ static const struct { const char *codename, *code, *name; int batt_mod; } CODE_D
     { "corvette", "ace3pro", "一加 Ace3 Pro", 0 },
     { "aston",    "ace3",    "一加 Ace3",     0 },
     { "piloti",   "gt7p",    "真我 GT7 Pro 竞速版", 0 },
-    { "lafa",     "gt7",     "真我 GT7 Pro",  0 },   /* 仅注册防误刷: 无方案分支, service.sh 中止 */
+    { "pista",    "gt7s",    "真我 GT7 Pro",  0 },   /* Sun 平台标准版 (sa_fhd 静态 120 基准) */
+    { "lafa",     "gt8p",    "真我 GT8 Pro",  0 },   /* Canoe 平台 (fhd/sdc/wqhd_sdc 144 基准) */
+    { "macan",    "ace6t",   "一加 ACE6T",    0 },   /* Alor 平台 (sdc_fhd 165 基准, 同 ace6) */
     { NULL, NULL, NULL, 0 }
 };
+
+/* codename 匹配: 全等或 codename-XXX 变体 (macan-CN / macan-EU-US 等) */
+static int cn_match(const char *cn, const char *codename) {
+    size_t l = strlen(codename);
+    if (strncmp(cn, codename, l)) return 0;
+    return cn[l] == '\0' || cn[l] == '-';
+}
 
 /* 从 model 行提取 codename (最后一个逗号后的部分); 非已知 codename 返回 NULL */
 static const char *model_codename(const char *model) {
@@ -1649,7 +1664,7 @@ static const char *model_codename(const char *model) {
     /* 去空白 */
     while (*cn == ' ' || *cn == '\t') cn++;
     for (int i = 0; CODE_DEVS[i].codename; i++)
-        if (!strcmp(cn, CODE_DEVS[i].codename)) return CODE_DEVS[i].codename;
+        if (cn_match(cn, CODE_DEVS[i].codename)) return CODE_DEVS[i].codename;
     return NULL;
 }
 
@@ -1734,7 +1749,7 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
         if (max_sa_fhd) max_rate = max_sa_fhd;
     }
     if (max_rate == 0) max_rate = max_rate_dyn;
-    int oc_capable = strcmp(code, "op11") != 0 && strcmp(code, "gt7") != 0;   /* 一加11 仅电池/充电方案; GT7 Pro (lafa) 未验证不开放 */
+    int oc_capable = strcmp(code, "op11") != 0;   /* 一加11 仅电池/充电方案 */
     printf("DEVICE=%s\n", code);
     printf("NAME=%s\n", name);
     printf("MAX_RATE=%u\n", max_rate);
@@ -1948,6 +1963,8 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
     }
     if (BATT_MODIFY(bc->mode) && !bc->saw_cap)
         die("魔改电池模式开启但未找到 qcom,batt_capacity_mah 节点 (仅 ACE2Pro/一加12 支持魔改, 请勿在其他机型使用)");
+    if (BATT_V2800(bc->mode) && bc->v2800_hits == 0 && bc->v2800_ins == 0)
+        die("关机电压2800模式未找到可修改的关机电压节点 (qcom,vbatt_power_off / oplus,chg_shutdown_max_mv)");
     if (total_added == 0 &&
         !(bc->mode && (bc->cap_hits || bc->vmap_hits || bc->removed_lines || bc->v2800_hits || bc->v2800_ins || bc->gt7p_hits))) {
         fprintf(stderr, "[DONE] 没有任何条目被修改 (无需档位或已有档位)\n");
@@ -2015,7 +2032,7 @@ int main(int argc, char **argv) {
             "dtbo_oc — DTBO 刷新率超频 + 电池/充电方案 (保留原档位, 追加新档位)\n"
             "用法:\n"
             "  dtbo_oc identify --img X --dtc PATH [--workdir D]\n"
-            "      输出 DEVICE=ace2pro|op12|op13|op13t|op15|op15t|ace3|ace3pro|ace5|ace6|gt8|gt7p|gt7|unknown\n"
+            "      输出 DEVICE=ace2pro|op12|op13|op13t|op15|op15t|ace3|ace3pro|ace5|ace6|ace6t|gt8|gt8p|gt7p|gt7s|op11|unknown\n"
             "  dtbo_oc info --img X [--dtc PATH --workdir D]\n"
             "  dtbo_oc patch --img IN --out OUT --dtc PATH --hz 130,132,138,141,144,150\n"
             "      [--workdir D] [--wxh WxH] [--exclude-family raw] [--include-family sa,sdc]\n"
@@ -2028,7 +2045,7 @@ int main(int argc, char **argv) {
             "                      2=解除充电限流+关机电压2800 电池解容 (全机型)\n"
             "                      3=6100mAh魔改电池 (关机3.0V/1%3.05V/满充4.54V)\n"
             "                      4=6100mAh魔改电池+解除充电限流\n"
-            "                      5=原版电池+关机电压2800 电池解容 (ACE2Pro/一加11/一加12)\n"
+            "                      5=原版电池+关机电压2800 电池解容 (全机型)\n"
             "                      6=GT7P竞速版解容: 满充4.55V+关机2.85V+解除充电限流 (仅 gt7p 机型)\n"
             "      [-v]\n");
         return 2;
@@ -2068,13 +2085,13 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "info")) { cmd_info(img, dtc, workdir); return 0; }
     if (!strcmp(cmd, "patch")) {
-        if (!out || !dtc || !hz) die("patch 需要 --out --dtc --hz");
+        if (!out || !dtc) die("patch 需要 --out --dtc");
         if (battery < 0 || battery > 6) die("--battery 取值 0/1/2/3/4/5/6");
         if (battery == 6 && !gt7p) die("--battery 6 (GT7P 解容) 需配合 --gt7p 使用");
         PatchCfg cfg; memset(&cfg, 0, sizeof(cfg));
         BattCfg bc; memset(&bc, 0, sizeof(bc));
         bc.mode = battery;
-        parse_hz_list(hz, &cfg);
+        if (hz) parse_hz_list(hz, &cfg);   /* --hz 可省略: 不超频机型仅电池/充电方案 (如一加11) */
         cfg.margin_low = mlow; cfg.margin_high = mhigh;
         cfg.modify_phy = !no_phy;
         cfg.gt7p = gt7p;

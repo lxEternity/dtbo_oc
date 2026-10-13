@@ -46,8 +46,10 @@ case "$DEVICE" in
     op15|ace6) CHOICES="185 195" ;;
     gt8)       CHOICES="144 165 185 195" ;;
     gt7p)      CHOICES="130 142 144" ;;
+    gt7s)      CHOICES="144 165 185" ;;
+    gt8p)      CHOICES="165 185" ;;
+    ace6t)     CHOICES="185" ;;
     op11)      CHOICES="" ;;   # 一加11 不可超频
-    gt7) echo "[错误] 真我 GT7 Pro (标准版) 暂未适配"; exit 1 ;;
     *) echo "[错误] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
 
@@ -186,17 +188,30 @@ fi
 # BATTERY: 0=原版 1=解除限流 2=解除限流+关机2800(电池解容)
 #          3=6100魔改 4=6100魔改+解除限流 5=原版+关机2800(电池解容)
 #          6=GT7P竞速版解容 (满充4.55V/关机2.85V/解除限流, 仅 gt7p)
-# 3/4/5 仅魔改电池机型 (BATT_OK=1)
+# 3/4 仅魔改电池机型 (BATT_OK=1); 2/5 全机型
 if [ "$DEVICE" = "gt7p" ]; then
     GT_INIT=0
     [ "$BATTERY" = "6" ] && GT_INIT=1
     choose "电池/充电方案:" "保持原版电池|GT7P 竞速版解容 (满充4.55V/关机2.85V/解除充电限流)" "$GT_INIT"
     BATTERY=$([ "$SEL" = "1" ] && echo 6 || echo 0)
 else
-    BAT_MENU="保持原版电池|解除充电限流|解除充电限流 + 关机电压2800 (电池解容)"
-    [ "$BATT_OK" = "1" ] && BAT_MENU="$BAT_MENU|6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)|6100mAh 魔改电池 + 解除充电限流|原版电池 + 关机电压2800 (电池解容)"
-    choose "电池/充电方案:" "$BAT_MENU" "$BATTERY"
-    BATTERY=$SEL
+    BAT_MENU="保持原版电池|解除充电限流|解除充电限流 + 关机电压2800 (电池解容)|原版电池 + 关机电压2800 (电池解容)"
+    BAT_MODES="0 1 2 5"
+    if [ "$BATT_OK" = "1" ]; then
+        BAT_MENU="$BAT_MENU|6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)|6100mAh 魔改电池 + 解除充电限流"
+        BAT_MODES="$BAT_MODES 3 4"
+    fi
+    INIT=0; i=0
+    for m in $BAT_MODES; do
+        [ "$m" = "$BATTERY" ] && INIT=$i
+        i=$((i+1))
+    done
+    choose "电池/充电方案:" "$BAT_MENU" "$INIT"
+    i=0
+    for m in $BAT_MODES; do
+        [ "$i" = "$SEL" ] && BATTERY=$m
+        i=$((i+1))
+    done
 fi
 if [ "$BATT_OK" = "1" ] && { [ "$BATTERY" = "3" ] || [ "$BATTERY" = "4" ]; }; then
     echo "  !! 非魔改电池勿选, 可能导致过充/鼓包 !!"
