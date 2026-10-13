@@ -1113,9 +1113,15 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
 /* UFCS 策略表 5 元组首 cell 标识 (0x2af8) */
 #define UFCS_TUPLE_TAG  11000u
 
+/* oplus 策略表解除输入限流: 电流位 x2 上限 (mA) */
+#define BATT_STRAT_ICLMAX  8000u
+/* 策略表电流位放大下限 (mA): 低于此值视为涓流/异常表, 不放大 */
+#define BATT_STRAT_IMIN    100u
+
 typedef struct {
     /* mode: 0=关闭
-             1=解除充电限流 (全机型)
+             1=解除充电限流 (全机型: 老平台删 qcom 限流节点,
+                新平台 oplus 策略表电流位 x2 cap 8000)
              2=解除充电限流+关机电压2800 电池解容 (全机型)
              3=6100mAh 魔改电池 (容量6100/关机3.0V/1%3.05V/满充4.54V)
              4=6100mAh 魔改电池+解除充电限流
@@ -1130,6 +1136,7 @@ typedef struct {
     int cap_hits, voff_hits, v1p_hits;   /* 魔改替换计数 */
     int v2800_hits, v2800_ins;           /* 关机电压2800: 替换/插入计数 */
     int vmap_hits, removed_lines;
+    int strat_hits;         /* oplus 策略表电流位放大计数 (新平台解除限流) */
     int saw_cap;            /* 见到 qcom,batt_capacity_mah 属性 (魔改机型指纹) */
     int gt7p_hits;          /* gt7p 解容: 替换/放大计数 (电压/电流/iclmax) */
 } BattCfg;
@@ -1231,6 +1238,13 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
     const int modify    = BATT_MODIFY(bc->mode);
     const int v2800     = BATT_V2800(bc->mode);
     const int gt7p      = BATT_GT7P(bc->mode);
+    /* 新平台指纹: 含 oplus,chg_shutdown_max_mv 的充电 DT (gt7s/gt8p/ace6t 等)
+       解除限流走 oplus 策略表电流位放大; 老平台 (qcom 限流节点删除) 不受影响 */
+    int new_plat = 0;
+    if (del_limit && !gt7p) {
+        for (int i = 0; i < d->n && !new_plat; i++)
+            if (strstr(d->lines[i], "oplus,chg_shutdown_max_mv")) new_plat = 1;
+    }
     /* 第一遍: 行替换 (电池参数 + 电压段 + 关机电压2800); 解除限流模式同时收集待删行 */
     int *del = NULL, ndel = 0, delcap = 0;
     if (del_limit) { delcap = 64; del = xmalloc(sizeof(int) * delcap); }
@@ -1282,7 +1296,60 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
             continue;
         }
         if (!modify && !gt7p) {
-            /* 非魔改模式: 其余电池参数保持不动 */
+            /* 非魔改模式: 其余电池参数保持不动;
+               例外 — 新平台解除限流 (mode 1/2): oplus 策略表电流位 x2 (cap 8000) */
+            if (new_plat && !strncmp(pn, "strategy_temp_", 14)) {
+                /* strategy_temp_range_curves 内为 (I,V,f) 三元组表, 其余为 5 元组表:
+                   UFCS (0x2af8,V,I,f,f) 电流位=base+2; 无 tag (V,I,f,f,f) 首 cell 为
+                  电池电压 (3800-4900mV) 时电流位=base+1, 首 cell 非电压的模糊表跳过 */
+                int in_curves = 0;
+                for (int k = 0; k < ndepth; k++)
+                    if (!strcmp(nstack[k], "strategy_temp_range_curves")) { in_curves = 1; break; }
+                uint32_t sc[512];
+                int sn = parse_u32_cells(val, sc, 512);
+                int nhit = 0;
+                if (sn >= 3) {
+                    if (in_curves) {
+                        for (int j = 0; j + 3 <= sn; j += 3) {
+                            uint32_t cur = sc[j];
+                            if (cur >= BATT_STRAT_IMIN && cur < BATT_STRAT_ICLMAX) {
+                                uint32_t ni = cur * 2;
+                                if (ni > BATT_STRAT_ICLMAX) ni = BATT_STRAT_ICLMAX;
+                                sc[j] = ni; nhit++;
+                            }
+                        }
+                    } else {
+                        for (int base = 0; base + 5 <= sn; base += 5) {
+                            int ipos;
+                            if (sc[base] == UFCS_TUPLE_TAG) ipos = base + 2;
+                            else if (sc[base] >= 3800 && sc[base] <= 4900) ipos = base + 1;
+                            else continue;
+                            uint32_t cur = sc[ipos];
+                            if (cur >= BATT_STRAT_IMIN && cur < BATT_STRAT_ICLMAX) {
+                                uint32_t ni = cur * 2;
+                                if (ni > BATT_STRAT_ICLMAX) ni = BATT_STRAT_ICLMAX;
+                                sc[ipos] = ni; nhit++;
+                            }
+                        }
+                    }
+                }
+                if (nhit) {
+                    char body[8192]; int off = 0;
+                    off += snprintf(body + off, sizeof(body) - off, "%s = <", pn);
+                    for (int j = 0; j < sn; j++)
+                        off += snprintf(body + off, sizeof(body) - off, "%s0x%x", j ? " " : "", sc[j]);
+                    off += snprintf(body + off, sizeof(body) - off, ">;");
+                    char *ws = lead_ws(line);
+                    char *nl = xmalloc(strlen(ws) + strlen(body) + 2);
+                    strcpy(nl, ws); strcat(nl, body);
+                    free(ws);
+                    free(d->lines[i]);
+                    d->lines[i] = nl;
+                    changed++;
+                    bc->strat_hits += nhit;
+                    if (verbose) fprintf(stderr, "[BATT][新平台] 策略表电流位 x%d: %s\n", nhit, body);
+                }
+            }
             if (close_br && ndepth > 0) { free(nstack[--ndepth]); }
             continue;
         }
@@ -1965,8 +2032,10 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
         die("魔改电池模式开启但未找到 qcom,batt_capacity_mah 节点 (仅 ACE2Pro/一加12 支持魔改, 请勿在其他机型使用)");
     if (BATT_V2800(bc->mode) && bc->v2800_hits == 0 && bc->v2800_ins == 0)
         die("关机电压2800模式未找到可修改的关机电压节点 (qcom,vbatt_power_off / oplus,chg_shutdown_max_mv)");
+    if ((bc->mode == 1 || bc->mode == 2) && bc->removed_lines == 0 && bc->strat_hits == 0)
+        die("解除充电限流模式未找到可修改的限流节点 (qcom 限流节点 / oplus 策略表)");
     if (total_added == 0 &&
-        !(bc->mode && (bc->cap_hits || bc->vmap_hits || bc->removed_lines || bc->v2800_hits || bc->v2800_ins || bc->gt7p_hits))) {
+        !(bc->mode && (bc->cap_hits || bc->vmap_hits || bc->removed_lines || bc->strat_hits || bc->v2800_hits || bc->v2800_ins || bc->gt7p_hits))) {
         fprintf(stderr, "[DONE] 没有任何条目被修改 (无需档位或已有档位)\n");
         write_file(out_path, b, n);
         free(b); free(img.e); free(repl); free(repl_n); free(replaced);
@@ -2012,9 +2081,9 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
             printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 解容替换/放大 x%d)\n",
                 out_path, out_n, total_added, mdesc[6], bc->gt7p_hits);
         else
-            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 容量x%d 关机3.0V x%d 1%%电压x%d 电压段x%d 关机2800替换x%d插入x%d 删限流x%d)\n",
+            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 容量x%d 关机3.0V x%d 1%%电压x%d 电压段x%d 关机2800替换x%d插入x%d 删限流x%d 策略电流x%d)\n",
                 out_path, out_n, total_added, mdesc[bc->mode], bc->cap_hits, bc->voff_hits, bc->v1p_hits, bc->vmap_hits,
-                bc->v2800_hits, bc->v2800_ins, bc->removed_lines);
+                bc->v2800_hits, bc->v2800_ins, bc->removed_lines, bc->strat_hits);
     }
     else
         printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, DTBO total %zu)\n", out_path, out_n, total_added, off);
@@ -2041,7 +2110,7 @@ int main(int argc, char **argv) {
             "      [--margin-low 1.012205] [--margin-high 1.021537] [--no-phy]\n"
             "      [--gt7p]  GT7 Pro 竞速版简单克隆模式 (sa_fhd 动态基准, 保留 dyn-clk, porch/phy 原值)\n"
             "      [--battery 0-6]  0=不改(默认)\n"
-            "                      1=解除充电限流 (全机型)\n"
+            "                      1=解除充电限流 (全机型: 老平台删qcom限流节点/新平台策略表电流x2)\n"
             "                      2=解除充电限流+关机电压2800 电池解容 (全机型)\n"
             "                      3=6100mAh魔改电池 (关机3.0V/1%3.05V/满充4.54V)\n"
             "                      4=6100mAh魔改电池+解除充电限流\n"
