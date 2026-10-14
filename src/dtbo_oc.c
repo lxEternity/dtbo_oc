@@ -486,6 +486,9 @@ typedef struct {
     int has_rate, has_width, has_height, has_clock, has_vfp, has_vbp, has_vpw, has_hfp, has_hbp, has_hpw;
     int has_phy, has_transfer, has_vsync, has_adfr;
     uint32_t rate, width, height, clock, vfp, vbp, vpw, hfp, hbp, hpw, transfer, vsync;
+    int has_cidx; uint32_t cidx;    /* cell-index: 部分机型 (如 op13t AA594) 驱动按其
+                                       索引 timing 档位, 克隆档必须分配面板内唯一新值,
+                                       复制基准值会与基准档冲突导致切换命中错误档位 */
     uint8_t phy[128]; int phy_len;
     int adfr_cells[8]; int adfr_n;          /* 解析出的 cell 值 */
     char adfr_rest[256];                    /* 第二个 cell 起的原始文本 */
@@ -712,6 +715,7 @@ static int scan_timing_nodes(Dts *d, TNode *nodes, int max_nodes) {
             }
             else if (!strcmp(pn, "qcom,mdss-mdp-transfer-time-us")) { tn->has_transfer = 1; tn->transfer = parse_u32_from_val(val); }
             else if (!strcmp(pn, "oplus,apollo-panel-vsync-width")) { tn->has_vsync = 1; tn->vsync = parse_u32_from_val(val); }
+            else if (!strcmp(pn, "cell-index")) { tn->has_cidx = 1; tn->cidx = parse_u32_from_val(val); }
             else if (!strcmp(pn, "oplus,adfr-min-fps-mapping-table")) {
                 tn->has_adfr = 1;
                 /* 解析所有 cell, 记录第二个起的原始文本 */
@@ -854,7 +858,7 @@ static int parse_u32_cells(const char *val, uint32_t *cells, int max);
 
 /* 对一个 dts 执行补丁; 返回新增节点数 */
 static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
-                     char (*stock_names)[160], int stock_n) {
+                     char (*stock_names)[160], int stock_n, int *fixed_out) {
     TNode *nodes = xmalloc(sizeof(TNode) * MAX_NODES);
     int nn = scan_timing_nodes(d, nodes, MAX_NODES);
     /* 家族分组 (按 面板+家族): 同名家族可能出现在多个面板节点下
@@ -933,6 +937,59 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                 fams[k].fam, fams[k].panel, nodes[fams[k].base_idx].name, nodes[fams[k].base_idx].rate);
     }
     if (!nf) { free(nodes); return 0; }
+
+    /* 面板 cell-index 分配器: 同面板已用最大值 +1 起分配 (op13t 等按 cell-index
+       索引 timing 的机型, 克隆档需唯一新值; 无 cell-index 机型不启用) */
+    int pcidx_panel[64]; uint32_t pcidx_next[64]; int npci = 0;
+    for (int j = 0; j < nn; j++) {
+        if (!nodes[j].has_cidx || nodes[j].panel < 0) continue;
+        int f = -1;
+        for (int q = 0; q < npci; q++) if (pcidx_panel[q] == nodes[j].panel) { f = q; break; }
+        if (f < 0) { if (npci >= 64) break; pcidx_panel[npci] = nodes[j].panel; pcidx_next[npci] = 0; f = npci++; }
+        if (nodes[j].cidx + 1 > pcidx_next[f]) pcidx_next[f] = nodes[j].cidx + 1;
+    }
+
+    /* cell-index 去重: 旧版本克隆档复制了基准档的 cell-index, 与基准冲突导致
+       "有超频档位但切换后仍为基准刷新率"; 克隆块插在基准节点之前, 行序遍历
+       先遇到克隆档(先占用者)后遇到原厂基准 → 修正"先占用者"(克隆档),
+       保留后到者(原厂基准), 保证原厂档 index 不被改动 */
+    {
+        static uint8_t used[64][256];
+        static int first_holder[64][256];
+        int fixed_cidx = 0;
+        memset(used, 0, sizeof(used));
+        memset(first_holder, -1, sizeof(first_holder));
+        for (int j = 0; j < nn; j++) {
+            TNode *t = &nodes[j];
+            if (!t->has_cidx || t->panel < 0 || t->cidx > 255) continue;
+            int f = -1;
+            for (int q = 0; q < npci; q++) if (pcidx_panel[q] == t->panel) { f = q; break; }
+            if (f < 0) continue;
+            if (!used[f][t->cidx]) { used[f][t->cidx] = 1; first_holder[f][t->cidx] = j; continue; }
+            /* 冲突: 后到者是原厂基准(保留原值), 修正先占用者(克隆档) */
+            int victim = first_holder[f][t->cidx];
+            if (victim < 0 || victim == j) continue;
+            TNode *V = &nodes[victim];
+            if (pcidx_next[f] > 255) continue;
+            uint32_t nc = pcidx_next[f]++;
+            used[f][nc] = 1; first_holder[f][nc] = victim;
+            for (int q2 = V->start; q2 < V->end; q2++) {
+                char pn2[160]; const char *v2;
+                if (parse_prop_line(d->lines[q2], pn2, sizeof(pn2), &v2) == 2 && !strcmp(pn2, "cell-index")) {
+                    char *ws = lead_ws(d->lines[q2]);
+                    char *nl = fmt_line(ws, "cell-index = <0x%x>;", nc);
+                    free(d->lines[q2]); d->lines[q2] = nl; free(ws);
+                    break;
+                }
+            }
+            V->cidx = nc;
+            first_holder[f][t->cidx] = j;   /* 原厂基准接管该 index */
+            fixed_cidx++;
+        }
+        if (verbose && fixed_cidx)
+            fprintf(stderr, "[FIX] 已修正 %d 个克隆档冲突的 cell-index\n", fixed_cidx);
+        if (fixed_out) *fixed_out = fixed_cidx;
+    }
 
     /* 收集插入块 */
     typedef struct { int at; char **lines; int n; } Ins;
@@ -1045,6 +1102,17 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                         /* 克隆节点不携带 phandle: 原节点 phandle 保持不变, 新节点无引用,
                            保留会导致 dtc duplicated phandle 错误 (如一加15 wqhd_plus 时序) */
                         patched = 1; /* 置位即跳过该行 */
+                    }
+                    else if (B->has_cidx && !strcmp(pn, "cell-index")) {
+                        /* 克隆档分配面板内唯一 cell-index: op13t AA594 等面板驱动按
+                           cell-index 索引 timing, 复制基准值会与基准档冲突,
+                           导致"有超频档位但切换后实际仍为基准刷新率" */
+                        uint32_t nc = 0;
+                        for (int q = 0; q < npci; q++)
+                            if (pcidx_panel[q] == B->panel) { nc = pcidx_next[q]++; break; }
+                        if (nc) cl[cn++] = fmt_line(ws, "cell-index = <0x%x>;", nc);
+                        else cl[cn++] = xstrdup(src);   /* 兜底: 未查到计数器保留原值 */
+                        patched = 1;
                     }
                     else if (cfg->gt7p && !strcmp(pn, "qcom,dsi-dyn-clk-list")) {
                         /* GT7P: 保留 dyn-clk-list, 首项替换为实测 dyn 时钟 (130 档 dyn 与静态时钟不同) */
@@ -2166,7 +2234,7 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
     uint8_t **repl = xmalloc(sizeof(uint8_t*) * img.count);
     size_t *repl_n = xmalloc(sizeof(size_t) * img.count);
     int *replaced = xmalloc(sizeof(int) * img.count);
-    int total_added = 0;
+    int total_added = 0, total_fixed = 0;
     for (uint32_t i = 0; i < img.count; i++) {
         repl[i] = NULL; repl_n[i] = 0; replaced[i] = 0;
         DtboEntry *e = &img.e[i];
@@ -2207,9 +2275,10 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
         Dts d; dts_load(&d, in_dts);
         /* 电池补丁先于时序克隆 (行替换/删除不影响后续重扫描) */
         int batt_changed = patch_battery_dts(&d, bc, verbose);
-        int added = patch_dts(&d, cfg, verbose, stock_names, stock_n);
+        int fixed_ci = 0;
+        int added = patch_dts(&d, cfg, verbose, stock_names, stock_n, &fixed_ci);
         free(stock_names);
-        if (added <= 0 && batt_changed <= 0) { dts_free(&d); continue; }
+        if (added <= 0 && batt_changed <= 0 && fixed_ci <= 0) { dts_free(&d); continue; }
         dts_save(&d, out_dts);
         dts_free(&d);
         run_dtc(dtc, out_dts, out_dtb, 0);
@@ -2222,10 +2291,13 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
         repl[i] = read_file(out_dtb, &repl_n[i]);
         replaced[i] = 1;
         total_added += added;
+        total_fixed += fixed_ci;
         if (batt_changed > 0)
             fprintf(stderr, "[OK] entry[%u]: 电池补丁 %d 处 (%u -> %zu 字节)\n", i, batt_changed, e->dt_size, repl_n[i]);
         if (added > 0)
             fprintf(stderr, "[OK] entry[%u]: 新增 %d 个超频档位 (%u -> %zu 字节)\n", i, added, e->dt_size, repl_n[i]);
+        if (fixed_ci > 0)
+            fprintf(stderr, "[OK] entry[%u]: 修正 %d 个冲突 cell-index\n", i, fixed_ci);
     }
     if (BATT_MODIFY(bc->mode) && !bc->saw_cap)
         die("魔改电池模式开启但未找到 qcom,batt_capacity_mah 节点 (仅 ACE2Pro/一加12 支持魔改, 请勿在其他机型使用)");
@@ -2233,7 +2305,7 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
         die("关机电压2800模式未找到可修改的关机电压节点 (qcom,vbatt_power_off / oplus,chg_shutdown_max_mv)");
     if ((bc->mode == 1 || bc->mode == 2) && bc->removed_lines == 0 && bc->strat_hits == 0)
         die("解除充电限流模式未找到可修改的限流节点 (qcom 限流节点 / oplus 策略表)");
-    if (total_added == 0 &&
+    if (total_added == 0 && total_fixed == 0 &&
         !(bc->mode && (bc->cap_hits || bc->vmap_hits || bc->removed_lines || bc->strat_hits || bc->v2800_hits || bc->v2800_ins || bc->gt7p_hits))) {
         fprintf(stderr, "[DONE] 没有任何条目被修改 (无需档位或已有档位)\n");
         write_file(out_path, b, n);
@@ -2285,7 +2357,8 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
                 bc->v2800_hits, bc->v2800_ins, bc->removed_lines, bc->strat_hits);
     }
     else
-        printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, DTBO total %zu)\n", out_path, out_n, total_added, off);
+        printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位%s, DTBO total %zu)\n", out_path, out_n, total_added,
+            total_fixed ? ", 修正冲突 cell-index" : "", off);
     free(out); free(payload);
     for (uint32_t i = 0; i < img.count; i++) free(repl[i]);
     free(repl); free(repl_n); free(replaced);
