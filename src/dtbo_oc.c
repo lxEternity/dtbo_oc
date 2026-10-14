@@ -478,6 +478,9 @@ static uint8_t *avb_rebuild(const uint8_t *orig, size_t orig_n, int orig_total,
 
 typedef struct {
     int start, end;                 /* 行区间 [start,end) */
+    int panel;                      /* 所属面板节点头行号 (-1=未知): 同名 timing 家族
+                                       可能出现在多个面板 (如 op13t AA594 evt/量产),
+                                       克隆需按面板独立进行, 仅按家族分组会漏掉后出现的面板 */
     char name[160];                 /* timing@ 后的名字 */
     int is_dynamic;
     int has_rate, has_width, has_height, has_clock, has_vfp, has_vbp, has_vpw, has_hfp, has_hbp, has_hpw;
@@ -656,6 +659,16 @@ static int scan_timing_nodes(Dts *d, TNode *nodes, int max_nodes) {
         memset(tn, 0, sizeof(*tn));
         memcpy(tn->name, p + 7, nl - 7); tn->name[nl - 7] = 0;
         tn->start = i; tn->end = end;
+        /* 面板归属: 向上越过 timings 容器 (深度 d0), 在面板体内 (深度 d0-1) 找到
+           第一个以 '{' 结尾的行 = 面板节点头; 用于区分多面板下的同名家族 */
+        tn->panel = -1;
+        for (int j = i - 1; j >= 0; j--) {
+            if (depth_after[j] < d0 - 1) break;              /* 越过面板头, 越界 */
+            if (depth_after[j] != d0 - 1) continue;          /* timings 容器内部, 跳过 */
+            const char *q = d->lines[j]; size_t ql = strlen(q);
+            while (ql > 0 && (q[ql-1] == ' ' || q[ql-1] == '\t')) ql--;
+            if (ql > 0 && q[ql-1] == '{') { tn->panel = j; break; }
+        }
         /* 属性扫描 */
         for (int j = i + 1; j < end; j++) {
             char pn[160]; const char *val;
@@ -844,9 +857,12 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                      char (*stock_names)[160], int stock_n) {
     TNode *nodes = xmalloc(sizeof(TNode) * MAX_NODES);
     int nn = scan_timing_nodes(d, nodes, MAX_NODES);
-    /* 家族分组: 第一遍仅静态节点; 若整个镜像无静态时序 (如 ace3/ace3pro 全部
+    /* 家族分组 (按 面板+家族): 同名家族可能出现在多个面板节点下
+       (如 op13t AA594 dsc_cmd_evt 与 dsc_cmd 量产面板), 每个面板需独立克隆,
+       仅按家族全局分组会只 patch 第一个面板, 量产面板无超频档位;
+       第一遍仅静态节点; 若整个镜像无静态时序 (如 ace3/ace3pro 全部
        带 dyn-clk-list), 第二遍允许动态节点作为基准 (克隆产物删除 dyn-clk-list 转静态) */
-    typedef struct { char fam[160]; int base_idx; } Fam;
+    typedef struct { char fam[160]; int base_idx; int panel; } Fam;
     Fam fams[512]; int nf = 0;
     for (int pass = 0; pass < 2 && nf == 0; pass++) {
     for (int i = 0; i < nn; i++) {
@@ -901,8 +917,9 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             if (!ok) continue;
         }
         int found = -1;
-        for (int k = 0; k < nf; k++) if (!strcmp(fams[k].fam, fam)) { found = k; break; }
-        if (found < 0) { if (nf >= 512) break; strcpy(fams[nf].fam, fam); fams[nf].base_idx = i; nf++; continue; }
+        for (int k = 0; k < nf; k++)
+            if (fams[k].panel == t->panel && !strcmp(fams[k].fam, fam)) { found = k; break; }
+        if (found < 0) { if (nf >= 512) break; strcpy(fams[nf].fam, fam); fams[nf].base_idx = i; fams[nf].panel = t->panel; nf++; continue; }
         if (cfg->gt7p) {
             /* gt7p: 基准固定为原厂 120 档 (sa_fhd 家族唯一克隆源, 实机验证基准);
                防止已含 OC 档 (130/142/144) 的镜像把克隆档误选为基准 */
@@ -910,6 +927,11 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
         } else if (nodes[fams[found].base_idx].rate < t->rate) fams[found].base_idx = i;
     }
     } /* end pass */
+    if (getenv("DTBO_OC_DEBUG")) {
+        for (int k = 0; k < nf; k++)
+            fprintf(stderr, "[DBG] fam=%s panel=%d base=%s(rate=%u)\n",
+                fams[k].fam, fams[k].panel, nodes[fams[k].base_idx].name, nodes[fams[k].base_idx].rate);
+    }
     if (!nf) { free(nodes); return 0; }
 
     /* 收集插入块 */
@@ -931,6 +953,7 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             for (int attempt = 0; attempt < 8; attempt++) {
                 exists_same = 0;
                 for (int j = 0; j < nn; j++) {
+                    if (nodes[j].panel != B->panel) continue;   /* 幂等判定限定同面板 */
                     if (!strcmp(nodes[j].name, newname + 0)) {
                         /* gt7p 克隆档保留 dyn-clk-list (is_dynamic=1), 幂等判定不查动态标志 */
                         if ((int)nodes[j].rate == hz && (!nodes[j].is_dynamic || cfg->gt7p)) { exists_same = 1; break; }
@@ -938,9 +961,10 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                     }
                 }
                 if (exists_same) break;
-                /* 名字存在但刷新率不同(或不存在) → 尝试后缀 */
+                /* 名字存在但刷新率不同(或不存在) → 尝试后缀 (同名仅在同面板内才冲突) */
                 int clash = 0;
-                for (int j = 0; j < nn; j++) if (!strcmp(nodes[j].name, newname)) { clash = 1; break; }
+                for (int j = 0; j < nn; j++)
+                    if (nodes[j].panel == B->panel && !strcmp(nodes[j].name, newname)) { clash = 1; break; }
                 if (!clash) break;
                 snprintf(newname, sizeof(newname), "%s_%d_%d", fams[k].fam, hz, ++suffix);
             }
@@ -951,6 +975,7 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             if (B->is_mtk && B->has_turbo) {
                 int b1 = -1, b2 = -1;
                 for (int j = 0; j < nn; j++) {
+                    if (nodes[j].panel != B->panel) continue;   /* 外推基准限定同面板 */
                     if (!nodes[j].has_turbo || !nodes[j].has_rate) continue;
                     char fj[160]; name_has_hz_suffix(nodes[j].name, fj, sizeof(fj));
                     if (strcmp(fj, fams[k].fam)) continue;
