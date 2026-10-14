@@ -1,5 +1,4 @@
 #!/system/bin/sh
-# 卸载模块时, 若存在原始 DTBO 备份则自动恢复, 保证卸载后回到未超频状态
 DATA_DIR=/data/adb/dtbo_oc
 STOCK="$DATA_DIR/dtbo_stock.img"
 BACKUP="/sdcard/dtbo_backup.img"
@@ -28,4 +27,3 @@ else
     echo "[dtbo_oc] 未找到原始备份, 保持当前 DTBO 不变"
     echo "[dtbo_oc] 如需恢复请查看 /sdcard/dtbo_backup.img"
 fi
-# 保留 /data/adb/dtbo_oc 下的备份与日志, 便于手动恢复; 确认不再需要后可手动删除

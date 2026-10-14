@@ -1,15 +1,12 @@
 #!/system/bin/sh
-# Magisk 安装器脚本 — DTBO 刷新率超频 v2 (多机型, 音量键交互选择)
 SKIPUNZIP=0
 
-# 检查架构
 ARCH64=$(getprop ro.product.cpu.abi)
 if [ "$ARCH64" != "arm64-v8a" ]; then
     ui_print "! 本模块仅支持 arm64 设备 (当前: $ARCH64)"
     abort
 fi
 
-# 解锁提示 (仅警告, 不阻止安装)
 LOCKED=$(getprop ro.boot.flash.locked)
 VBS=$(getprop ro.boot.verifiedbootstate)
 if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
@@ -35,7 +32,6 @@ STOCK="$DATA_DIR/dtbo_stock.img"
 CONFIG="$DATA_DIR/config"
 mkdir -p "$DATA_DIR" "$WORK"
 
-# ---------------- 定位 dtbo 分区并准备原始镜像 ----------------
 SLOT=$(getprop ro.boot.slot_suffix)
 DTBO=""
 for d in /dev/block/by-name /dev/block/bootdevice/by-name; do
@@ -48,7 +44,6 @@ if [ -z "$DTBO" ]; then
 else
     ui_print "- dtbo 分区: $DTBO"
     if [ ! -f "$STOCK" ]; then
-        # 原始镜像优先级: 已有备份 > v1.0.0 的 /sdcard/dtbo_backup.img > 当前分区
         if [ -f /sdcard/dtbo_backup.img ]; then
             cp /sdcard/dtbo_backup.img "$STOCK"
             ui_print "- 已采用 /sdcard/dtbo_backup.img 作为原始镜像基准"
@@ -61,7 +56,6 @@ else
     fi
 fi
 
-# ---------------- 机型识别 ----------------
 DEVICE=""; DEVNAME=""
 if [ -f "$STOCK" ]; then
     IDINFO=$("$TOOL" identify --img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>/dev/null)
@@ -72,7 +66,6 @@ if [ -f "$STOCK" ]; then
 fi
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
-# 菜单档位选项 (仅可超频机型)
 CHOICES=""
 case "$DEVICE" in
     ace2pro)   DEF_HZ=144; CHOICES="144/165/185" ;;
@@ -89,7 +82,9 @@ case "$DEVICE" in
     gt7s)      DEF_HZ=185; CHOICES="144/165/185" ;;
     gt8p)      DEF_HZ=185; CHOICES="165/185" ;;
     ace6t)     DEF_HZ=185; CHOICES="185" ;;
-    op11)      DEF_HZ=0;   CHOICES="" ;;   # 一加11 不可超频
+    ace6u)     DEF_HZ=195; CHOICES="185/195" ;;
+    ace5p)     DEF_HZ=144; CHOICES="144" ;;
+    op11)      DEF_HZ=0;   CHOICES="" ;;
     *)
         ui_print "! 无法识别机型 (DEVICE=$DEVICE)"
         ui_print "! 模块仍将安装, 但开机 service.sh 会再次校验并中止"
@@ -101,21 +96,18 @@ if [ "$DEVICE" = "op11" ]; then
     ui_print "- 本机型不支持刷新率超频, 仅电池/充电方案可用"
 fi
 
-# ---------------- 按键输入: 音量上=up 音量下=down 电源键=select ----------------
-# 优先 dtbo_oc keys (EVIOCGRAB 内核级拦截, 电源键事件被独占消费, 不会触发系统息屏)
+# ---------------- key input: vol+ = up, vol- = down, power = select ----------------
 HAVE_KEYS=0
 [ -x "$TOOL" ] && HAVE_KEYS=1
 HAVE_GETEVENT=0
 command -v getevent >/dev/null 2>&1 && HAVE_GETEVENT=1
 
-# 兜底亮屏: 电源键被拦截后系统不会自动亮屏, 确认时主动点亮
 wake_screen() { command -v input >/dev/null 2>&1 && input keyevent 224 2>/dev/null; return 0; }
 
-# 阻塞读取一次有效按键; keys/getevent 均不可用时返回 1 (调用方保持默认)
 wait_key() {
     if [ "$HAVE_KEYS" = "1" ]; then
         K=$("$TOOL" keys 2>/dev/null) && { [ "$K" = "select" ] && wake_screen; echo "$K"; return 0; }
-        HAVE_KEYS=0   # 失败 (无设备/权限), 本次会话降级
+        HAVE_KEYS=0
     fi
     while true; do
         EV=$(getevent -qlc 1 2>/dev/null | head -n 1)
@@ -128,7 +120,7 @@ wait_key() {
     done
 }
 
-# ui_choose 标题 "选项1|选项2|..." [初始索引] -> SEL / SEL_TEXT
+# ui_choose TITLE "opt1|opt2|..." [init_index] -> SEL / SEL_TEXT
 ui_choose() {
     TITLE="$1"; OPTSTR="$2"; SEL="${3:-0}"
     OLDIFS="$IFS"; IFS='|'; set -- $OPTSTR; IFS="$OLDIFS"
@@ -162,8 +154,6 @@ ui_choose() {
     ui_print "  已选择: $SEL_TEXT"
 }
 
-# ---------------- 选择方案 ----------------
-# 优先级: /sdcard/dtbo_oc.conf 预设 > 音量键交互(默认高亮旧配置) > 默认值
 HZ_CHOICE=""; BATTERY=""
 PRESET=0
 if [ -f /sdcard/dtbo_oc.conf ]; then
@@ -171,7 +161,6 @@ if [ -f /sdcard/dtbo_oc.conf ]; then
     PRESET=1
     ui_print "- 检测到 /sdcard/dtbo_oc.conf 预设, 跳过按键选择"
 fi
-# 旧配置作为按键选择的默认高亮项
 if [ -z "$HZ_CHOICE" ] && [ -f "$CONFIG" ]; then
     OLD_HZ=$(grep '^HZ_CHOICE=' "$CONFIG" 2>/dev/null | cut -d= -f2)
     [ -n "$OLD_HZ" ] && HZ_CHOICE="$OLD_HZ"
@@ -185,7 +174,6 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
     ui_print " "
     ui_print "- 请用 [音量+/音量-] 切换选项, [电源键] 确认"
     ui_print "  (按键事件已被拦截: 电源键确认不会息屏, 音量键不会弹音量条)"
-    # 档位选择 (仅可超频机型)
     if [ -n "$CHOICES" ] && [ "$OC_OK" = "1" ]; then
         OPTSTR=""; INIT=0; i=0
         for c in $(echo "$CHOICES" | tr '/' ' '); do
@@ -193,7 +181,10 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
             [ "$c" = "$HZ_CHOICE" ] && INIT=$i
             i=$((i+1))
         done
+        OPTSTR="$OPTSTR|不超频 (仅电池/充电方案)"
+        [ "$HZ_CHOICE" = "0" ] && INIT=$i
         ui_choose "选择超频目标档位 (仅生成 <= 所选的档位):" "$OPTSTR" "$INIT"
+        HZ_CHOICE=0
         i=0
         for c in $(echo "$CHOICES" | tr '/' ' '); do
             [ "$i" = "$SEL" ] && HZ_CHOICE="$c"
@@ -203,7 +194,6 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
         ui_print "- 本机型不支持刷新率超频, 跳过档位选择"
         HZ_CHOICE=0
     fi
-    # 电池选择
     if [ "$DEVICE" = "gt7p" ]; then
         GT_INIT=0
         [ "${BATTERY:-0}" = "6" ] && GT_INIT=1
@@ -238,9 +228,9 @@ elif [ "$PRESET" != "1" ]; then
     if [ -z "$CHOICES" ] || [ "$OC_OK" != "1" ]; then HZ_CHOICE=0; fi
 fi
 
-# 校验档位
 if [ "$OC_OK" = "1" ] && [ -n "$CHOICES" ]; then
     VALID=0
+    [ "$HZ_CHOICE" = "0" ] && VALID=1
     for c in $(echo "$CHOICES" | tr '/' ' '); do [ "$HZ_CHOICE" = "$c" ] && VALID=1; done
     if [ "$VALID" != "1" ]; then
         HZ_CHOICE="$DEF_HZ"
@@ -250,8 +240,6 @@ else
     HZ_CHOICE=0
 fi
 
-# 校验电池选项
-# BATTERY: 0=原版 1=解除限流 2=解除限流+关机2800 3=6100魔改 4=魔改+解除限流 5=原版+关机2800 6=GT7P解容
 [ -z "$BATTERY" ] && BATTERY=0
 case "$BATTERY" in 0|1|2|3|4|5|6) ;; *) BATTERY=0 ;; esac
 if [ "$BATT_OK" != "1" ]; then
@@ -293,7 +281,6 @@ case "$BATTERY" in
         ;;
 esac
 
-# ---------------- 写入配置 ----------------
 cat > "$CONFIG" <<EOF
 # DTBO 刷新率超频 v2 配置 (修改后重启生效; 也可运行 menu.sh 音量键交互修改)
 # 机型: $DEVNAME ($DEVICE)

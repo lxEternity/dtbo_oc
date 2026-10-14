@@ -487,6 +487,9 @@ typedef struct {
     int adfr_cells[8]; int adfr_n;          /* 解析出的 cell 值 */
     char adfr_rest[256];                    /* 第二个 cell 起的原始文本 */
     char adfr_rest2[256];                   /* 第三个 cell 起的原始文本 (gt7p 144 档第二 cell 需替换) */
+    /* MTK 平台 (ace6u 等): oplus,dsi-panel-framerate/pllclk + dyn-fps/turbo 子节点 */
+    int is_mtk, has_turbo;
+    uint32_t turbo;                         /* turbo 子节点 turbo_fps_value */
 } TNode;
 
 typedef struct {
@@ -658,12 +661,19 @@ static int scan_timing_nodes(Dts *d, TNode *nodes, int max_nodes) {
             char pn[160]; const char *val;
             int r = parse_prop_line(d->lines[j], pn, sizeof(pn), &val);
             if (r != 2) {
-                if (r == 1 && !strcmp(pn, "qcom,dsi-dyn-clk-list")) tn->is_dynamic = 1;
+                if (r == 1) {
+                    if (!strcmp(pn, "qcom,dsi-dyn-clk-list")) tn->is_dynamic = 1;
+                    else if (!strcmp(pn, "mtk,skip_vblank")) tn->is_mtk = 1;   /* MTK flag 属性 */
+                }
                 continue;
             }
             if (!strcmp(pn, "qcom,dsi-dyn-clk-list")) tn->is_dynamic = 1;
             else if (strstr(pn, "dyn-clk")) tn->is_dynamic = 1;
             else if (!strcmp(pn, "qcom,mdss-dsi-panel-framerate")) { tn->has_rate = 1; tn->rate = parse_u32_from_val(val); }
+            else if (!strcmp(pn, "oplus,dsi-panel-framerate")) {   /* MTK 平台帧率标识 */
+                tn->is_mtk = 1; tn->has_rate = 1; tn->rate = parse_u32_from_val(val);
+            }
+            else if (!strcmp(pn, "turbo_fps_value")) { tn->has_turbo = 1; tn->turbo = parse_u32_from_val(val); }
             else if (!strcmp(pn, "qcom,mdss-dsi-panel-width")) { tn->has_width = 1; tn->width = parse_u32_from_val(val); }
             else if (!strcmp(pn, "qcom,mdss-dsi-panel-height")) { tn->has_height = 1; tn->height = parse_u32_from_val(val); }
             else if (!strcmp(pn, "qcom,mdss-dsi-panel-clockrate")) {
@@ -858,13 +868,18 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             if (!in_stock) continue;
         }
         if (!t->has_rate || t->has_rate < 0) continue;
-        if (t->has_clock < 0 || t->has_phy < 0) { 
+        if (t->is_mtk) {
+            /* MTK 平台 (ace6u): 无 qcom width/height/clock/porch 属性,
+               走简单克隆 (仅替换 framerate/vact_timing_fps/turbo_fps_value) */
+        } else {
+        if (t->has_clock < 0 || t->has_phy < 0) {
             fprintf(stderr, "[WARN] 节点 %s 的 clockrate/phy 属性格式无法解析，跳过该节点\n", t->name);
             continue;
         }
         if (!t->has_width || !t->has_height || !t->has_clock) {
             fprintf(stderr, "[WARN] 节点 %s 缺少 width/height/clockrate，跳过\n", t->name);
             continue;
+        }
         }
         if (cfg->wxh_filter && (t->width != cfg->wx || t->height != cfg->wy)) continue;
         char fam[160];
@@ -930,6 +945,26 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                 snprintf(newname, sizeof(newname), "%s_%d_%d", fams[k].fam, hz, ++suffix);
             }
             if (exists_same) { if (verbose) fprintf(stderr, "[INFO] %s 已存在 %dHz 档位，跳过\n", newname, hz); continue; }
+            /* MTK 平台 turbo_fps_value 线性外推: 取家族内两个最高档 (有 turbo 者) 求斜率;
+               仅一档有 turbo 时按帧率比例缩放 (实测每帧约 101 单位) */
+            uint32_t nturbo = 0;
+            if (B->is_mtk && B->has_turbo) {
+                int b1 = -1, b2 = -1;
+                for (int j = 0; j < nn; j++) {
+                    if (!nodes[j].has_turbo || !nodes[j].has_rate) continue;
+                    char fj[160]; name_has_hz_suffix(nodes[j].name, fj, sizeof(fj));
+                    if (strcmp(fj, fams[k].fam)) continue;
+                    if (b1 < 0 || nodes[j].rate > nodes[b1].rate) { b2 = b1; b1 = j; }
+                    else if (b2 < 0 || nodes[j].rate > nodes[b2].rate) b2 = j;
+                }
+                if (b1 >= 0 && b2 >= 0 && nodes[b1].rate > nodes[b2].rate)
+                    nturbo = (uint32_t)((double)nodes[b1].turbo +
+                        (hz - (int)nodes[b1].rate) * (double)(nodes[b1].turbo - nodes[b2].turbo) /
+                        (double)(nodes[b1].rate - nodes[b2].rate) + 0.5);
+                else
+                    nturbo = (uint32_t)((double)B->turbo * hz / B->rate + 0.5);
+                if ((int)nturbo < hz) nturbo = (uint32_t)hz;
+            }
             /* 计算新参数 */
             double p = ratio;
             uint32_t nvfp = B->has_vfp ? (uint32_t)clamp_round(B->vfp * interp3(p, 1.0, 0.5), 1, (int)B->vfp) : 0;
@@ -1005,6 +1040,9 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                         /* 动态基准克隆: 删除 dyn-clk-list 等动态时钟属性, 产物转为纯静态节点 */
                         patched = 1;
                     }
+                    else if (B->is_mtk && !strcmp(pn, "oplus,dsi-panel-framerate")) { cl[cn++] = fmt_line(ws, "oplus,dsi-panel-framerate = <0x%x>;", hz); patched = 1; }
+                    else if (B->is_mtk && !strcmp(pn, "vact_timing_fps")) { cl[cn++] = fmt_line(ws, "vact_timing_fps = <0x%x>;", hz); patched = 1; }
+                    else if (B->is_mtk && !strcmp(pn, "turbo_fps_value") && nturbo) { cl[cn++] = fmt_line(ws, "turbo_fps_value = <0x%x>;", nturbo); patched = 1; }
                     else if (!strcmp(pn, "qcom,mdss-dsi-panel-framerate")) { cl[cn++] = fmt_line(ws, "qcom,mdss-dsi-panel-framerate = <0x%x>;", hz); patched = 1; }
                     else if (!strcmp(pn, "qcom,mdss-dsi-panel-clockrate") && newclk) { cl[cn++] = fmt_line(ws, "qcom,mdss-dsi-panel-clockrate = <0x%llx>;", (unsigned long long)newclk); patched = 1; }
                     else if (!cfg->gt7p && !strcmp(pn, "qcom,mdss-dsi-v-front-porch") && B->has_vfp) { cl[cn++] = fmt_line(ws, "qcom,mdss-dsi-v-front-porch = <0x%x>;", nvfp); patched = 1; }
@@ -1195,12 +1233,14 @@ static uint32_t batt_map_single(const char *prop, uint32_t v) {
 
 /* boost 模式删除的充电限流节点
    前 3 个: ACE2Pro 实测教程的冷却降流/异常适配器限流 (oplus svooc 方案)
-   qcom,thermal-mitigation: 高通标准充电热限流表 (一加11/新机型充电 DT 为该方案) */
+   qcom,thermal-mitigation: 高通标准充电热限流表 (一加11/新机型充电 DT 为该方案)
+   oplus,abnormal_adapter_current: oplus 前缀版异常适配器限流 (ace5p/ace6u) */
 static const char *BATT_REMOVE_PROPS[] = {
     "qcom,svooc_cool_down_current_limit",
     "qcom,vooc_cool_down_current_limit",
     "qcom,abnormal_adapter_current",
     "qcom,thermal-mitigation",
+    "oplus,abnormal_adapter_current",
     NULL
 };
 
@@ -1301,7 +1341,9 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
             if (new_plat && !strncmp(pn, "strategy_temp_", 14)) {
                 /* strategy_temp_range_curves 内为 (I,V,f) 三元组表, 其余为 5 元组表:
                    UFCS (0x2af8,V,I,f,f) 电流位=base+2; 无 tag (V,I,f,f,f) 首 cell 为
-                  电池电压 (3800-4900mV) 时电流位=base+1, 首 cell 非电压的模糊表跳过 */
+                  电池电压 (3800-4900mV) 时电流位=base+1, 首 cell 非电压的模糊表跳过;
+                   ace5p (Sun 平台) 另有 4 元组表 (阈值,I,I,档位序号): 电流位=base+1/+2
+                  (指纹: sn%4==0 且每元组 cell[+3]<0x10 序号且 cell[+1]==cell[+2] 电流对) */
                 int in_curves = 0;
                 for (int k = 0; k < ndepth; k++)
                     if (!strcmp(nstack[k], "strategy_temp_range_curves")) { in_curves = 1; break; }
@@ -1319,6 +1361,26 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
                             }
                         }
                     } else {
+                        /* 4 元组表指纹预判 (ace5p 系): 优先于 5 元组, 防止 20-cell
+                           4 元组表被误按 5 元组分组 */
+                        int is_quad = (sn % 4 == 0);
+                        if (is_quad) {
+                            for (int base = 0; base + 4 <= sn; base += 4) {
+                                if (sc[base + 3] >= 0x10 || sc[base + 1] != sc[base + 2]) { is_quad = 0; break; }
+                            }
+                        }
+                        if (is_quad) {
+                            for (int base = 0; base + 4 <= sn; base += 4) {
+                                for (int ip = 1; ip <= 2; ip++) {
+                                    uint32_t cur = sc[base + ip];
+                                    if (cur >= BATT_STRAT_IMIN && cur < BATT_STRAT_ICLMAX) {
+                                        uint32_t ni = cur * 2;
+                                        if (ni > BATT_STRAT_ICLMAX) ni = BATT_STRAT_ICLMAX;
+                                        sc[base + ip] = ni; nhit++;
+                                    }
+                                }
+                            }
+                        } else {
                         for (int base = 0; base + 5 <= sn; base += 5) {
                             int ipos;
                             if (sc[base] == UFCS_TUPLE_TAG) ipos = base + 2;
@@ -1330,6 +1392,7 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
                                 if (ni > BATT_STRAT_ICLMAX) ni = BATT_STRAT_ICLMAX;
                                 sc[ipos] = ni; nhit++;
                             }
+                        }
                         }
                     }
                 }
@@ -1348,6 +1411,24 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
                     changed++;
                     bc->strat_hits += nhit;
                     if (verbose) fprintf(stderr, "[BATT][新平台] 策略表电流位 x%d: %s\n", nhit, body);
+                }
+            }
+            else if (new_plat && (!strcmp(pn, "oplus_spec,pd-iclmax-ma") ||
+                                  !strcmp(pn, "oplus_spec,qc-iclmax-ma"))) {
+                /* PD/QC 输入限流上限 -> 8000mA (ace5p: 原厂 2000mA) */
+                uint32_t v = parse_u32_from_val(val);
+                if (v < BATT_STRAT_ICLMAX) {
+                    char body[128];
+                    char *ws = lead_ws(line);
+                    snprintf(body, sizeof(body), "%s = <0x%x>;", pn, BATT_STRAT_ICLMAX);
+                    char *nl = xmalloc(strlen(ws) + strlen(body) + 2);
+                    strcpy(nl, ws); strcat(nl, body);
+                    free(ws);
+                    free(d->lines[i]);
+                    d->lines[i] = nl;
+                    changed++;
+                    bc->strat_hits++;
+                    if (verbose) fprintf(stderr, "[BATT][新平台] %s: %u -> %u mA\n", pn, v, BATT_STRAT_ICLMAX);
                 }
             }
             if (close_br && ndepth > 0) { free(nstack[--ndepth]); }
@@ -1713,6 +1794,7 @@ static const struct { const char *codename, *code, *name; int batt_mod; } CODE_D
     { "pista",    "gt7s",    "真我 GT7 Pro",  0 },   /* Sun 平台标准版 (sa_fhd 静态 120 基准) */
     { "lafa",     "gt8p",    "真我 GT8 Pro",  0 },   /* Canoe 平台 (fhd/sdc/wqhd_sdc 144 基准) */
     { "macan",    "ace6t",   "一加 ACE6T",    0 },   /* Alor 平台 (sdc_fhd 165 基准, 同 ace6) */
+    { "hummer",   "ace5p",   "一加 Ace5 Pro", 0 },   /* Sun 平台 (oplus_fhd/sdc_fhd 120 基准) */
     { NULL, NULL, NULL, 0 }
 };
 
@@ -1741,6 +1823,7 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     mkdir(workdir, 0755);
     int has_sa = 0, has_oa = 0, has_raw = 0, has_wqhd_oplus = 0, has_oplus_fhd = 0;
     int has_fhd_sdc = 0, has_wqhd_sdc = 0, has_sdc_fhd = 0;
+    int has_mtk_timing = 0;     /* MTK 时序指纹 (oplus,dsi-panel-framerate / mtk,skip_vblank) */
     uint32_t max_rate = 0, max_rate_dyn = 0;
     uint32_t max_sa_fhd = 0;   /* gt7p: sa_fhd 家族最高档 (含动态节点, AE035 全动态) */
     char codename[64] = "";
@@ -1772,6 +1855,7 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
         for (int j = 0; j < nn; j++) {
             TNode *t = &nodes[j];
             if (!t->has_rate) continue;
+            if (t->is_mtk) has_mtk_timing = 1;
             if (strstr(t->name, "sa_fhd") && t->rate > max_sa_fhd) max_sa_fhd = t->rate;
             if (t->is_dynamic) {
                 /* 全动态镜像 (ace3/ace3pro): 动态节点档位作为 MAX_RATE 兜底 */
@@ -1804,7 +1888,8 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     }
     if (!strcmp(code, "unknown")) {
         /* 家族指纹兜底 (旧机型: 无 codename 表条目) */
-        if (has_sa || has_oa || has_raw) { code = "ace2pro"; name = "一加 ACE2Pro"; batt_mod = 1; }
+        if (has_mtk_timing && (has_sa || has_oa)) { code = "ace6u"; name = "一加 ACE6 至尊版"; }
+        else if (has_sa || has_oa || has_raw) { code = "ace2pro"; name = "一加 ACE2Pro"; batt_mod = 1; }
         else if (has_wqhd_oplus) { code = "op13"; name = "一加 13"; }
         else if (has_oplus_fhd) { code = "op15"; name = "一加 15"; }
         else if (has_fhd_sdc || has_wqhd_sdc) { code = "gt8"; name = "真我 GT8"; }
@@ -1943,6 +2028,95 @@ static void parse_clock_override(const char *s, PatchCfg *cfg) {
         cfg->ov_clk[cfg->ov_n] = strtoull(colon + 1, NULL, 10);
         if (++cfg->ov_n >= 16) die("clock-override 过多");
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* checkoc: 检测 --img 相对 --stock 是否含超频节点                       */
+/*   (img 中存在而 stock 中不存在的字母命名 timing 节点 = OC 节点)        */
+/*   输出 NOC=<数量> 与 EXTRA=<节点名>; NOC=0 表示 img 为未超频镜像       */
+/*   (OTA 更新/恢复出厂/线刷后的原厂), service.sh 据此更新原厂基准       */
+/*   另输出 MISSING=<数量>: stock 中存在而 img 中缺失的节点数;            */
+/*   本模块的补丁从不删除原厂节点, MISSING>0 说明 img 并非基于 stock      */
+/*   生成 (如 OTA 重命名/删减了 timing 节点), 同样按 OTA 处理            */
+/*   另输出 FOREIGN=<数量>: img 额外节点中家族前缀不在 stock 里的数量;    */
+/*   OTA 新增屏幕供应商家族时出现, 同样按 OTA 处理                       */
+/* ------------------------------------------------------------------ */
+static int collect_named_timing(const char *img_path, const char *dtc, const char *workdir,
+                                const char *tag, char (*names)[160], int max) {
+    size_t n; uint8_t *b = read_file(img_path, &n);
+    DtboImg img; dtbo_parse(&img, b, n);
+    mkdir(workdir, 0755);
+    char path[4096];
+    int cnt = 0;
+    for (uint32_t i = 0; i < img.count; i++) {
+        DtboEntry *e = &img.e[i];
+        if (e->comp != 0) continue;
+        snprintf(path, sizeof(path), "%s/c%u_%s.dtb", workdir, i, tag);
+        write_file(path, e->stored, e->dt_size);
+        char dts_path[4096];
+        snprintf(dts_path, sizeof(dts_path), "%s/c%u_%s.dts", workdir, i, tag);
+        run_dtc(dtc, path, dts_path, 1);
+        Dts d; dts_load(&d, dts_path);
+        TNode *nodes = xmalloc(sizeof(TNode) * MAX_NODES);
+        int nn = scan_timing_nodes(&d, nodes, MAX_NODES);
+        for (int j = 0; j < nn; j++) {
+            if (nodes[j].name[0] >= '0' && nodes[j].name[0] <= '9') continue;
+            int dup = 0;
+            for (int k = 0; k < cnt; k++) if (!strcmp(names[k], nodes[j].name)) { dup = 1; break; }
+            if (!dup && cnt < max) strcpy(names[cnt++], nodes[j].name);
+        }
+        free(nodes); dts_free(&d);
+    }
+    free(b); free(img.e);
+    return cnt;
+}
+
+/* 提取 timing 节点名的家族前缀: 去掉尾部 _<hz> (及克隆去重的 _<n> 后缀) */
+static void timing_family(const char *name, char *fam, size_t famsz) {
+    snprintf(fam, famsz, "%s", name);
+    for (int round = 0; round < 2; round++) {
+        char *us = strrchr(fam, '_');
+        if (!us || !us[1]) break;
+        int alldigit = 1;
+        for (char *p = us + 1; *p; p++)
+            if (!isdigit((unsigned char)*p)) { alldigit = 0; break; }
+        if (!alldigit) break;
+        *us = 0;
+    }
+}
+
+static int cmd_checkoc(const char *img_path, const char *stock_path, const char *dtc, const char *workdir) {
+    static char inames[2048][160], snames[2048][160];
+    static char ifam[2048][160], sfam[2048][160];
+    int ni = collect_named_timing(img_path, dtc, workdir, "img", inames, 2048);
+    int ns = collect_named_timing(stock_path, dtc, workdir, "stk", snames, 2048);
+    for (int i = 0; i < ni; i++) timing_family(inames[i], ifam[i], 160);
+    for (int k = 0; k < ns; k++) timing_family(snames[k], sfam[k], 160);
+    int extra[2048], nextra = 0, nforeign = 0;
+    for (int i = 0; i < ni && nextra < 2048; i++) {
+        int found = 0, fam_found = 0;
+        for (int k = 0; k < ns; k++) {
+            if (!strcmp(inames[i], snames[k])) { found = 1; break; }
+            if (!strcmp(ifam[i], sfam[k])) fam_found = 1;
+        }
+        if (!found) {
+            extra[nextra++] = i;
+            /* 额外节点的家族前缀不在原厂基准中 => 非 OC 克隆节点 (OTA 新增家族) */
+            if (!fam_found) nforeign++;
+        }
+    }
+    int missing[2048], nmissing = 0;
+    for (int k = 0; k < ns && nmissing < 2048; k++) {
+        int found = 0;
+        for (int i = 0; i < ni; i++) if (!strcmp(snames[k], inames[i])) { found = 1; break; }
+        if (!found) missing[nmissing++] = k;
+    }
+    printf("NOC=%d\n", nextra);
+    printf("MISSING=%d\n", nmissing);
+    printf("FOREIGN=%d\n", nforeign);
+    for (int k = 0; k < nextra; k++) printf("EXTRA=%s\n", inames[extra[k]]);
+    for (int k = 0; k < nmissing; k++) printf("MISSED=%s\n", snames[missing[k]]);
+    return 0;
 }
 
 static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
@@ -2103,6 +2277,10 @@ int main(int argc, char **argv) {
             "  dtbo_oc identify --img X --dtc PATH [--workdir D]\n"
             "      输出 DEVICE=ace2pro|op12|op13|op13t|op15|op15t|ace3|ace3pro|ace5|ace6|ace6t|gt8|gt8p|gt7p|gt7s|op11|unknown\n"
             "  dtbo_oc info --img X [--dtc PATH --workdir D]\n"
+            "  dtbo_oc checkoc --img X --stock-img Y --dtc PATH [--workdir D]\n"
+            "      检测 X 相对 Y 的超频/缺失/陌生家族节点 (NOC/MISSING/FOREIGN)\n"
+            "      NOC=0 = X 未超频; MISSING>0 = X 缺 Y 的节点; FOREIGN>0 = X 有 Y 没有的家族\n"
+            "      任一成立且 X!=Y 都按 OTA 处理 (重新备份原厂基准)\n"
             "  dtbo_oc patch --img IN --out OUT --dtc PATH --hz 130,132,138,141,144,150\n"
             "      [--workdir D] [--wxh WxH] [--exclude-family raw] [--include-family sa,sdc]\n"
             "      [--clock-override 144:1315000000,165:1505156480]\n"
@@ -2121,7 +2299,7 @@ int main(int argc, char **argv) {
     }
     const char *cmd = argv[1];
     const char *img = NULL, *out = NULL, *dtc = NULL, *workdir = "/tmp/dtbo_oc_work";
-    const char *hz = NULL, *wxh = NULL, *exclude = "raw,oa", *include = "", *cov = "";
+    const char *hz = NULL, *wxh = NULL, *exclude = "raw", *include = "", *cov = "";
     const char *stock = NULL;
     int battery = 0;
     double mlow = 1.012205, mhigh = 1.021537;
@@ -2153,6 +2331,11 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (!strcmp(cmd, "info")) { cmd_info(img, dtc, workdir); return 0; }
+    if (!strcmp(cmd, "checkoc")) {
+        if (!stock || !dtc) die("checkoc 需要 --img --stock-img --dtc");
+        cmd_checkoc(img, stock, dtc, workdir);
+        return 0;
+    }
     if (!strcmp(cmd, "patch")) {
         if (!out || !dtc) die("patch 需要 --out --dtc");
         if (battery < 0 || battery > 6) die("--battery 取值 0/1/2/3/4/5/6");

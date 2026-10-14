@@ -1,8 +1,4 @@
 #!/system/bin/sh
-# DTBO 刷新率超频 v2 — 开机自动执行 (多机型)
-# 流程: 定位 dtbo -> 首次备份原始镜像 -> 读取 config(机型/档位/电池)
-#       -> 始终以原始镜像为基准重建补丁 -> 与当前分区比对 -> 需要时刷入
-# 始终从原始镜像重建 => 切换档位/电池方案时自动移除旧的超频节点, 天然幂等
 MODDIR=${0%/*}
 TOOL="$MODDIR/arm64/dtbo_oc"
 DTC="$MODDIR/arm64/dtc"
@@ -18,15 +14,15 @@ mkdir -p "$DATA_DIR" "$WORK"
 : > "$LOG"
 chmod 755 "$TOOL" "$DTC" 2>/dev/null
 
-# ---------------- 默认配置 ----------------
 if [ ! -f "$CONFIG" ]; then
     cat > "$CONFIG" <<'EOF'
 # DTBO 刷新率超频 v2 配置 (修改后重启生效; 也可运行 /data/adb/modules/dtbo_oc/menu.sh 交互修改)
 #
 # HZ_CHOICE: 超频目标档位 (仅生成 <= 此值的档位, 更高的不生成; 0 = 不超频)
 #   ace2pro/gt7s 可选: 144/165/185     gt8 可选: 144/165/185/195
-#   op12/op13/op13t/ace5/ace3/ace3pro 可选: 144
-#   op15/ace6/op15t/ace6t 可选: 185    gt8p 可选: 165/185
+#   op12/op13/op13t/ace5/ace3/ace3pro/ace5p 可选: 144
+#   op15/ace6/op15t 可选: 185/195      ace6t 可选: 185    ace6u 可选: 185/195
+#   gt8p 可选: 165/185
 #   gt7p 可选: 130/142/144
 #   op11: 不可超频 (自动忽略)
 HZ_CHOICE=144
@@ -54,7 +50,6 @@ EOF
 fi
 . "$CONFIG"
 
-# ---------------- 安全提示 (仅警告, 不阻止执行) ----------------
 LOCKED=$(getprop ro.boot.flash.locked)
 VBS=$(getprop ro.boot.verifiedbootstate)
 if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
@@ -63,7 +58,6 @@ if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
     log "[警告] 请确认已解锁 Bootloader, 否则请立即卸载本模块并恢复原始 DTBO"
 fi
 
-# ---------------- 定位 dtbo 分区 ----------------
 SLOT=$(getprop ro.boot.slot_suffix)
 DTBO="${DTBO_PATH:-}"
 if [ -z "$DTBO" ]; then
@@ -76,14 +70,11 @@ fi
 [ -z "$DTBO" ] && { log "[错误] 未找到 dtbo 分区; 可在 config 设置 DTBO_PATH"; exit 1; }
 log "dtbo 分区: $DTBO (slot=$SLOT)"
 
-# ---------------- 原始镜像基准 ----------------
 CUR="$WORK/current.img"
 dd if="$DTBO" of="$CUR" 2>>"$LOG" || { log "[错误] 读取 $DTBO 失败"; exit 1; }
 log "已提取当前 DTBO: $(wc -c < "$CUR") 字节"
 
 if [ ! -f "$STOCK" ]; then
-    # 首次运行: 当前分区视为原始镜像并备份
-    # (若之前用过 v1.0.0 并留有 /sdcard/dtbo_backup.img, 优先使用该备份)
     if [ -f /sdcard/dtbo_backup.img ]; then
         cp /sdcard/dtbo_backup.img "$STOCK"
         log "已从 /sdcard/dtbo_backup.img 恢复原始镜像基准"
@@ -93,7 +84,6 @@ if [ ! -f "$STOCK" ]; then
     fi
 fi
 
-# ---------------- 机型识别 ----------------
 rm -rf "$WORK"/ide* 2>/dev/null
 IDINFO=$("$TOOL" identify --img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>>"$LOG")
 DEVICE=$(echo "$IDINFO" | grep '^DEVICE=' | cut -d= -f2)
@@ -102,7 +92,6 @@ BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
 OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
-# 菜单档位选项
 CHOICES=""
 case "$DEVICE" in
     ace2pro)   CHOICES="144 165 185"; DEF_HZ=144 ;;
@@ -119,12 +108,13 @@ case "$DEVICE" in
     gt7s)      CHOICES="144 165 185";     DEF_HZ=185 ;;
     gt8p)      CHOICES="165 185";         DEF_HZ=185 ;;
     ace6t)     CHOICES="185";             DEF_HZ=185 ;;
-    op11)      CHOICES="";            DEF_HZ=0 ;;   # 一加11 不可超频
+    ace6u)     CHOICES="185 195";         DEF_HZ=195 ;;
+    ace5p)     CHOICES="144";             DEF_HZ=144 ;;
+    op11)      CHOICES="";            DEF_HZ=0 ;;
     *) log "[中止] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
 log "机型识别: $DEVNAME ($DEVICE)"
 
-# 校正档位选择
 if [ "$OC_OK" != "1" ] || [ -z "$CHOICES" ]; then
     if [ "${HZ_CHOICE:-0}" != "0" ]; then
         log "[提示] 本机型不支持刷新率超频, 已忽略档位设置 (HZ_CHOICE=$HZ_CHOICE)"
@@ -132,15 +122,14 @@ if [ "$OC_OK" != "1" ] || [ -z "$CHOICES" ]; then
     HZ_CHOICE=0
 else
     VALID=0
+    [ "$HZ_CHOICE" = "0" ] && VALID=1
     for c in $CHOICES; do [ "$HZ_CHOICE" = "$c" ] && VALID=1; done
     if [ "$VALID" != "1" ]; then
-        log "[提示] HZ_CHOICE=$HZ_CHOICE 不适用于本机型, 可选: $CHOICES, 使用默认 $DEF_HZ"
+        log "[提示] HZ_CHOICE=$HZ_CHOICE 不适用于本机型, 可选: $CHOICES 或 0(不超频), 使用默认 $DEF_HZ"
         HZ_CHOICE=$DEF_HZ
     fi
 fi
 
-# 校正电池选项
-# BATTERY: 0=原版 1=解除限流 2=解除限流+关机2800 3=6100魔改 4=魔改+解除限流 5=原版+关机2800
 [ -z "$BATTERY" ] && BATTERY=0
 case "$BATTERY" in 0|1|2|3|4|5|6) ;; *) BATTERY=0 ;; esac
 if [ "$BATT_OK" != "1" ]; then
@@ -164,9 +153,6 @@ elif [ "$BATTERY" = "6" ]; then
 fi
 log "方案: 档位 ${HZ_CHOICE:-0}, 电池模式 $BATTERY"
 
-# ---------------- 展开档位列表 ----------------
-# 120Hz 面板机型 (ace2pro/op13/op13t/ace5/ace3/ace3pro) 144 档列表含 132/150:
-#   130,132,138,141,144,150
 HZ=""
 case "$DEVICE" in
     ace2pro)
@@ -202,14 +188,20 @@ case "$DEVICE" in
         esac ;;
     ace6t)
         HZ=170,178,185 ;;
+    ace6u)
+        case "$HZ_CHOICE" in
+            185) HZ=170,178,185 ;;
+            195) HZ=170,178,185,188,195 ;;
+        esac ;;
+    ace5p)
+        HZ=130,132,138,141,144,150 ;;
     gt7p)
-        # GT7P 竞速版实测档位: 130/142/144 (仅生成 <= HZ_CHOICE 的档位)
         case "$HZ_CHOICE" in
             130) HZ=130 ;;
             142) HZ=130,142 ;;
             144) HZ=130,142,144 ;;
         esac ;;
-    op11) HZ="" ;;   # 一加11 不可超频
+    op11) HZ="" ;;
 esac
 if [ "$HZ_CHOICE" = "0" ]; then
     HZ=""
@@ -220,7 +212,6 @@ else
     log "生成档位列表: $HZ (电池模式 $BATTERY)"
 fi
 
-# ---------------- 从原始镜像重建补丁 ----------------
 NEW="$WORK/patched.img"
 rm -rf "$WORK"/e*_* 2>/dev/null
 PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --battery $BATTERY --workdir $WORK"
@@ -230,13 +221,32 @@ PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --battery $BATTERY --workdir $WOR
 RC=$?
 [ "$RC" != "0" ] && [ "$RC" != "3" ] && { log "[错误] 补丁生成失败 (exit=$RC), 详情见 $LOG, 未做任何写入"; exit 1; }
 
-# ---------------- 幂等检查 ----------------
 if cmp -s "$CUR" "$NEW"; then
     log "当前 DTBO 已是目标状态, 无需刷入"
     exit 0
 fi
 
-# 备份原始镜像到内置存储 (仅首次)
+rm -rf "$WORK"/c*_* 2>/dev/null
+CKOUT=$("$TOOL" checkoc --img "$CUR" --stock-img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>>"$LOG")
+NOC=$(echo "$CKOUT" | grep '^NOC=' | cut -d= -f2)
+MISSING=$(echo "$CKOUT" | grep '^MISSING=' | cut -d= -f2)
+FOREIGN=$(echo "$CKOUT" | grep '^FOREIGN=' | cut -d= -f2)
+[ -z "$MISSING" ] && MISSING=0
+[ -z "$FOREIGN" ] && FOREIGN=0
+if { [ "$NOC" = "0" ] || [ "$MISSING" != "0" ] || [ "$FOREIGN" != "0" ]; } && ! cmp -s "$CUR" "$STOCK"; then
+    log "检测到 dtbo 分区被系统更新 (OTA, NOC=$NOC MISSING=$MISSING FOREIGN=$FOREIGN), 重新备份原厂基准并生成补丁"
+    cp "$CUR" "$STOCK"
+    [ -n "$BACKUP_PATH" ] && cp "$STOCK" "$BACKUP_PATH"
+    rm -rf "$WORK"/e*_* 2>/dev/null
+    "$TOOL" patch $PATCH_ARGS >> "$LOG" 2>&1
+    RC=$?
+    [ "$RC" != "0" ] && [ "$RC" != "3" ] && { log "[错误] 新基准补丁生成失败 (exit=$RC), 未做任何写入"; exit 1; }
+    if cmp -s "$CUR" "$NEW"; then
+        log "新基准下当前 DTBO 已是目标状态, 无需刷入"
+        exit 0
+    fi
+fi
+
 if [ -n "$BACKUP_PATH" ] && [ ! -f "$BACKUP_PATH" ]; then
     cp "$STOCK" "$BACKUP_PATH" && log "原始镜像已备份到 $BACKUP_PATH"
 fi
@@ -247,7 +257,6 @@ if [ "${FLASH:-1}" != "1" ]; then
     exit 0
 fi
 
-# ---------------- 刷入并校验 ----------------
 log "正在刷入 $NEW -> $DTBO"
 if ! dd if="$NEW" of="$DTBO" 2>>"$LOG"; then
     log "[错误] 刷入失败"

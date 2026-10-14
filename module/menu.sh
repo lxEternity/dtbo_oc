@@ -1,7 +1,6 @@
 #!/system/bin/sh
-# DTBO 刷新率超频 v2 — 交互菜单 (音量上/下切换选项, 电源键确认)
-# 用法: adb shell su -c "sh /data/adb/modules/dtbo_oc/menu.sh"
-# 无 getevent 的环境下自动退回数字输入: 1=上 2=下 3=确认
+# usage: adb shell su -c "sh /data/adb/modules/dtbo_oc/menu.sh"
+# fallback to numeric input without getevent: 1=up 2=down 3=confirm
 MODDIR=${0%/*}
 [ -d "$MODDIR/arm64" ] || MODDIR=/data/adb/modules/dtbo_oc
 TOOL="$MODDIR/arm64/dtbo_oc"
@@ -24,7 +23,6 @@ if [ ! -f "$STOCK" ]; then
     exit 1
 fi
 
-# ---------------- 机型识别 ----------------
 IDINFO=$("$TOOL" identify --img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>/dev/null)
 DEVICE=$(echo "$IDINFO" | grep '^DEVICE=' | cut -d= -f2)
 DEVNAME=$(echo "$IDINFO" | grep '^NAME=' | cut -d= -f2)
@@ -32,7 +30,6 @@ BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
 OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
-# 菜单档位选项 (仅可超频机型)
 CHOICES=""
 case "$DEVICE" in
     ace2pro)   CHOICES="144 165 185" ;;
@@ -49,18 +46,18 @@ case "$DEVICE" in
     gt7s)      CHOICES="144 165 185" ;;
     gt8p)      CHOICES="165 185" ;;
     ace6t)     CHOICES="185" ;;
-    op11)      CHOICES="" ;;   # 一加11 不可超频
+    ace6u)     CHOICES="185 195" ;;
+    ace5p)     CHOICES="144" ;;
+    op11)      CHOICES="" ;;
     *) echo "[错误] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
 
-# 读取当前配置
 HZ_CHOICE=""; BATTERY=""
 [ -f "$CONFIG" ] && . "$CONFIG"
 [ -z "$HZ_CHOICE" ] && HZ_CHOICE=144
 [ -z "$BATTERY" ] && BATTERY=0
 
-# ---------------- 按键输入: 音量上=up 音量下=down 电源键=select ----------------
-# 优先 dtbo_oc keys (EVIOCGRAB 内核级拦截, 电源键事件被独占消费, 不会触发系统息屏)
+# ---------------- key input: vol+ = up, vol- = down, power = select ----------------
 HAVE_KEYS=0
 [ -x "$TOOL" ] && HAVE_KEYS=1
 HAVE_GETEVENT=0
@@ -73,13 +70,12 @@ else
     TIPS=" 操作: [1]上 [2]下 [3]确认 (本机不支持按键监听, 数字键模式)"
 fi
 
-# 兜底亮屏: 电源键被拦截后系统不会自动亮屏, 确认时主动点亮
 wake_screen() { command -v input >/dev/null 2>&1 && input keyevent 224 2>/dev/null; return 0; }
 
 wait_key() {
     if [ "$HAVE_KEYS" = "1" ]; then
         K=$("$TOOL" keys 2>/dev/null) && { [ "$K" = "select" ] && wake_screen; echo "$K"; return 0; }
-        HAVE_KEYS=0   # 失败 (无设备/权限), 本次会话降级
+        HAVE_KEYS=0
     fi
     if [ "$HAVE_GETEVENT" = "1" ]; then
         SPIN=0
@@ -95,7 +91,7 @@ wait_key() {
         done
     fi
     printf "[1]上 [2]下 [3]确认 > " >&2
-    if ! read K; then K=3; fi   # EOF 视为确认, 防止死循环
+    if ! read K; then K=3; fi
     case "$K" in
         1) echo up ;;
         2) echo down ;;
@@ -103,8 +99,7 @@ wait_key() {
     esac
 }
 
-# choose 标题 "选项1|选项2|..." [初始索引]
-# 结果: SEL=索引(0起), SEL_TEXT=选中文本
+# choose TITLE "opt1|opt2|..." [init_index] -> SEL / SEL_TEXT
 choose() {
     TITLE="$1"; OPTSTR="$2"; SEL="${3:-0}"
     OLDIFS="$IFS"; IFS='|'; set -- $OPTSTR; IFS="$OLDIFS"
@@ -113,7 +108,6 @@ choose() {
     case "$SEL" in ''|*[!0-9]*) SEL=0 ;; esac
     [ "$SEL" -ge "$N" ] && SEL=0
     if [ -t 1 ]; then
-        # 终端模式: 高亮光标 + 局部刷新
         printf "\n%s\n" "$TITLE"
         i=0
         for o in "$@"; do
@@ -137,7 +131,6 @@ choose() {
             printf "%s\n" "$FOOT"
         done
     else
-        # 非终端: 逐行追加
         printf "\n%s\n" "$TITLE"
         i=0
         for o in "$@"; do
@@ -168,7 +161,6 @@ echo " 机型: $DEVNAME ($DEVICE)"
 echo "$TIPS"
 echo "=============================================="
 
-# ---------------- 档位选择 (仅可超频机型) ----------------
 if [ -n "$CHOICES" ] && [ "$OC_OK" = "1" ]; then
     OPTSTR=""; INIT=0; i=0
     for c in $CHOICES; do
@@ -176,7 +168,10 @@ if [ -n "$CHOICES" ] && [ "$OC_OK" = "1" ]; then
         [ "$c" = "$HZ_CHOICE" ] && INIT=$i
         i=$((i+1))
     done
+    OPTSTR="$OPTSTR|不超频 (仅电池/充电方案)"
+    [ "$HZ_CHOICE" = "0" ] && INIT=$i
     choose "选择超频目标档位 (仅生成 <= 所选的档位):" "$OPTSTR" "$INIT"
+    HZ_CHOICE=0
     i=0
     for c in $CHOICES; do [ "$i" = "$SEL" ] && HZ_CHOICE="$c"; i=$((i+1)); done
 else
@@ -184,11 +179,6 @@ else
     HZ_CHOICE=0
 fi
 
-# ---------------- 电池选择 ----------------
-# BATTERY: 0=原版 1=解除限流 2=解除限流+关机2800(电池解容)
-#          3=6100魔改 4=6100魔改+解除限流 5=原版+关机2800(电池解容)
-#          6=GT7P竞速版解容 (满充4.55V/关机2.85V/解除限流, 仅 gt7p)
-# 3/4 仅魔改电池机型 (BATT_OK=1); 2/5 全机型
 if [ "$DEVICE" = "gt7p" ]; then
     GT_INIT=0
     [ "$BATTERY" = "6" ] && GT_INIT=1
@@ -219,7 +209,6 @@ if [ "$BATT_OK" = "1" ] && { [ "$BATTERY" = "3" ] || [ "$BATTERY" = "4" ]; }; th
     [ "$SEL" = "0" ] && BATTERY=0
 fi
 
-# ---------------- 方案确认 ----------------
 echo ""
 echo "=============================================="
 echo " 方案确认"
@@ -242,7 +231,6 @@ echo "=============================================="
 choose "应用方式:" "稍后 (下次开机自动处理)|立即刷入 (重启后生效)" 0
 APPLY=$SEL
 
-# ---------------- 写回配置 ----------------
 if [ -f "$CONFIG" ]; then
     sed -i "s/^HZ_CHOICE=.*/HZ_CHOICE=$HZ_CHOICE/;s/^BATTERY=.*/BATTERY=$BATTERY/" "$CONFIG" 2>/dev/null || {
         cat > "$CONFIG" <<EOF
