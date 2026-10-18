@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e121b">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>超频解容 · 显示控制</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="4"/><path d="m8 14 3-5 2 6 3-5"/></svg></span><span>DTBO·OC <small>白驹过隙而已</small></span></div>
+      <button id="refresh" class="icon-button" type="button" aria-label="刷新当前状态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.2 7a7 7 0 0 1 11.5-1L20 9M4 15l2.3 3A7 7 0 0 0 17.8 17"/></svg></button>
+    </header>
+
+    <div class="title-row"><div><h1>超频控制</h1><p class="subtitle"><span id="device-name">正在识别机型…</span> <span>·</span> <span id="device-rate">—</span></p></div><span id="connection" class="badge">正在连接</span></div>
+
+    <section class="current-card" aria-label="当前方案">
+      <div class="card-top"><span>当前配置</span><span class="live-dot" aria-hidden="true"></span></div>
+      <div class="current-rate"><span id="current-rate">—</span><span class="hz-unit" id="current-rate-unit">Hz</span><svg class="signal" viewBox="0 0 122 58" aria-hidden="true"><path d="M2 38h18l10-20 15 36 15-49 15 42 12-20h33"/></svg></div>
+      <div class="current-bottom"><span id="current-mode">方案 —</span><span id="current-detail">—</span></div>
+    </section>
+
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+    <div id="error" class="error" role="alert" hidden></div>
+
+    <section class="setting-section" aria-labelledby="rate-heading">
+      <div class="section-heading"><h2 id="rate-heading">超频档位</h2><span id="rates-caption">自动识别中</span></div>
+      <div id="rates" class="rate-grid" role="radiogroup" aria-label="选择超频档位"><div class="placeholder">正在读取可用档位…</div></div>
+      <p class="hint" id="rate-hint">灰色为原厂档位 (仅展示); 超频档位为可选目标, 生成时不超过所选档位, 原厂已有档位自动跳过。</p>
+    </section>
+
+    <section class="setting-section" aria-labelledby="batt-heading">
+      <div class="section-heading"><h2 id="batt-heading">电池 / 充电方案</h2><span id="batt-caption">自动识别中</span></div>
+      <div id="batts" class="batt-grid" role="radiogroup" aria-label="选择电池方案"><div class="placeholder">正在读取可用方案…</div></div>
+      <p class="hint" id="batt-hint">魔改电池选项仅适用于已更换 6100mAh 魔改电池的设备。</p>
+    </section>
+
+    <section class="setting-section" aria-labelledby="mode-heading">
+      <div class="section-heading"><h2 id="mode-heading">超频方案</h2><span id="mode-caption">—</span></div>
+      <div id="modes" class="mode-grid" role="radiogroup" aria-label="选择超频方案"></div>
+      <p class="hint">DTBO 方案: 生成超频档位 DTBO 并刷入分区 (重启生效)。KO 方案: 运行时挂载内核模块, 不修改 DTBO, 卸载即恢复原厂档位。</p>
+    </section>
+
+    <section class="setting-section" aria-labelledby="ltpo-heading">
+      <div class="section-heading"><h2 id="ltpo-heading">LTPO 动态刷新率</h2><span id="ltpo-caption">防锁低档位</span></div>
+      <label class="avb-toggle" for="ltpo-off"><span>禁用 LTPO/VRR 动态刷新率<span class="t-detail">防止系统自动降档 (如锁 60Hz), 超频档位更稳定; 可能略增耗电, 重启后完全生效</span></span><input id="ltpo-off" type="checkbox" role="switch"></label>
+    </section>
+
+    <section class="apply-section" aria-label="应用设置">
+      <div class="selection-line"><span>当前选择</span><strong id="selection">—</strong></div>
+      <button id="apply" class="apply-button" type="button" disabled><span id="apply-label">保存并应用</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
+      <button id="restore" class="restore-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>恢复原厂 (DTBO + KO)</button>
+    </section>
+
+    <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> v2.35</footer>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

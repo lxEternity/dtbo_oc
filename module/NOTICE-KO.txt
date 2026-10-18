@@ -1,0 +1,34 @@
+超频解容模块 — KO 组件来源与许可声明
+====================================
+
+本模块 ko/ 目录内置的内核模块 (.ko) 及 bin/ko_abi_guard 工具
+来自以下 GPL-2.0 开源项目, 在此按原许可分发:
+
+1. MTK-Display-Overclock-LKM (PMB110)
+   源码: https://github.com/Yunnijian/MTK-Display-Overclock-LKM
+   适用: 一加 ACE6 至尊版 (ace6u)
+   许可: GPL-2.0
+
+2. murongchaopin (慕容显示增强) 的 DRM-KO 后端与 ko_abi_guard
+   源码: https://github.com/murongruyan/murongchaopin
+   适用: 真我GT8 Pro (gt8p / rmx5200), 一加15 (op15 / plk110),
+         一加12 (op12 / pjd110), 一加ACE6 (ace6 / plq110)
+   许可: GPL-2.0 (KO 源码 SPDX 标注)
+
+以上组件的任何修改版本将同样以 GPL-2.0 发布。
+完整对应源码请访问上述仓库获取。
+
+ko_abi_guard 机制说明:
+  开机时读取设备已加载 vendor DLKM 的符号 CRC 契约,
+  与 KO 记录比对: 一致则直接加载; CRC 漂移则生成运行时
+  适配副本后加载 (原文件不修改); 无法验证则拒绝加载。
+
+风险提示:
+  - KO 仅匹配特定内核版本 (vermagic + 符号 CRC), OTA 更新
+    内核后可能拒绝加载, 属正常自我保护, 非故障。
+  - ace6 (PLQ110) 的 KO 未经真机验证, 且该机型内核
+    PANIC_ON_OOPS + KASAN, 异常时表现为无法开机, 需要
+    进 Recovery 移除模块恢复。安装时请留意警告。
+  - gt8p (RMX5200) 实测 170Hz 稳定, 175Hz 少量细线,
+    180Hz 花屏; 选择更高档位风险自担, 重启即可恢复
+    (KO 不持久化, 不修改任何分区)。
