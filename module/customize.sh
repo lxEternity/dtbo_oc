@@ -20,11 +20,10 @@ LOCKED=$(getprop ro.boot.flash.locked)
 VBS=$(getprop ro.boot.verifiedbootstate)
 if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
     ui_print "*********************************************************"
-    ui_print " !! 中止: Bootloader 处于锁定/校验状态 !!"
-    ui_print " !! 锁定 BL 下刷入修改后的 DTBO 必然无法开机(变砖) !!"
-    ui_print " !! 请先解锁 Bootloader 后再安装本模块 !!"
+    ui_print " !! 警告: Bootloader 检测为锁定/校验状态 !!"
+    ui_print " !! 未解锁 BL 刷入修改后的 DTBO 会导致无法开机(变砖) !!"
+    ui_print " !! (Recovery 环境下该检测可能误报, 请以实际解锁状态为准) !!"
     ui_print "*********************************************************"
-    abort
 fi
 
 ui_print "*******************************"
