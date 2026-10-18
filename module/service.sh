@@ -34,10 +34,9 @@ case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
 LOCKED=$(getprop ro.boot.flash.locked)
 VBS=$(getprop ro.boot.verifiedbootstate)
 if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
-    log "[中止] Bootloader 处于锁定/校验状态 (flash.locked=$LOCKED verifiedbootstate=$VBS)"
-    log "[中止] 锁定 BL 下刷入修改后的 DTBO 必然无法开机(变砖), 已停止一切写入"
-    log "[中止] 请先解锁 Bootloader, 或卸载本模块"
-    exit 1
+    log "[警告] Bootloader 检测为锁定/校验状态 (flash.locked=$LOCKED verifiedbootstate=$VBS)"
+    log "[警告] 未解锁 BL 刷入修改后的 DTBO 会导致无法开机(变砖)!"
+    log "[警告] 请确认已解锁 Bootloader, 否则请卸载本模块并恢复原始 DTBO"
 fi
 
 SLOT=$(getprop ro.boot.slot_suffix)
