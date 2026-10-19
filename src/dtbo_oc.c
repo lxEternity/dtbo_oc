@@ -29,6 +29,7 @@
 #include <dirent.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <time.h>
 
 /* ------------------------------------------------------------------ */
 /* 基础工具                                                            */
@@ -115,6 +116,228 @@ static void sha256_final(Sha256 *c, uint8_t out[32]) {
 }
 static void sha256_buf(const void *data, size_t n, uint8_t out[32]) { Sha256 c; sha256_init(&c); sha256_update(&c, data, n); sha256_final(&c, out); }
 static void sha256_2buf(const void *a, size_t an, const void *b, size_t bn, uint8_t out[32]) { Sha256 c; sha256_init(&c); sha256_update(&c,a,an); sha256_update(&c,b,bn); sha256_final(&c,out); }
+
+/* ------------------------------------------------------------------ */
+/* v2.36 QQ 群验证: 云端群成员名单 + HMAC-SHA256 license               */
+/*   密钥/群号/名单URL 以 XOR 混淆内嵌 (lic_data.h), 不出现在明文字符串 */
+/*   名单仅可从内嵌 URL 联网拉取, 防止本地伪造名单绕过验证             */
+/* ------------------------------------------------------------------ */
+
+#include "lic_data.h"
+
+static void lic_xor_dec(const unsigned char *in, size_t n, char *out) {
+    for (size_t i = 0; i < n; i++) out[i] = (char)(in[i] ^ LIC_XOR[i & 15]);
+    out[n] = 0;
+}
+
+static void lic_group(char out[16]) { lic_xor_dec(GRP_C, sizeof GRP_C, out); }
+
+static void hmac_sha256(const uint8_t *key, size_t klen, const void *msg, size_t mlen, uint8_t out[32]) {
+    uint8_t k[64] = {0}, pad[64], mac[32];
+    Sha256 c;
+    if (klen > 64) sha256_buf(key, klen, k); else memcpy(k, key, klen);
+    for (int i = 0; i < 64; i++) pad[i] = k[i] ^ 0x36;
+    sha256_init(&c); sha256_update(&c, pad, 64); sha256_update(&c, msg, mlen); sha256_final(&c, mac);
+    for (int i = 0; i < 64; i++) pad[i] = k[i] ^ 0x5c;
+    sha256_init(&c); sha256_update(&c, pad, 64); sha256_update(&c, mac, 32); sha256_final(&c, out);
+}
+
+#define LIC_DAYS   30
+#define LIC_PREFIX "DTBOOCLIC1"
+
+static const char *license_path(void) {
+    const char *e = getenv("DTBO_OC_LICENSE");
+    return (e && *e) ? e : "/data/adb/dtbo_oc/license";
+}
+static const char *members_cache_path(void) {
+    return "/data/adb/dtbo_oc/members.txt";
+}
+
+/* license 校验: 0=有效 1=不存在 2=格式/HMAC无效 3=已过期 */
+static int license_check(char qq_out[16], long *exp_out) {
+    if (qq_out) qq_out[0] = 0;
+    if (exp_out) *exp_out = 0;
+    FILE *f = fopen(license_path(), "r");
+    if (!f) return 1;
+    char line[512];
+    int rc = 2;
+    if (fgets(line, sizeof line, f)) {
+        char *nl = strchr(line, '\n'); if (nl) *nl = 0;
+        char *f1 = strtok(line, "|");
+        char *f2 = strtok(NULL, "|");
+        char *f3 = strtok(NULL, "|");
+        char *f4 = strtok(NULL, "|");
+        char *f5 = strtok(NULL, "|");
+        if (f1 && f2 && f3 && f4 && f5 && !strcmp(f1, LIC_PREFIX) && strlen(f5) == 64) {
+            size_t ql = strlen(f2);
+            int ok = (ql >= 5 && ql <= 11 && f2[0] != '0');
+            for (size_t i = 0; ok && i < ql; i++) if (!isdigit((unsigned char)f2[i])) ok = 0;
+            for (const char *p = f3; ok && *p; p++) if (!isdigit((unsigned char)*p)) ok = 0;
+            for (const char *p = f4; ok && *p; p++) if (!isdigit((unsigned char)*p)) ok = 0;
+            if (ok) {
+                char payload[128];
+                snprintf(payload, sizeof payload, "%s|%s|%s|%s", LIC_PREFIX, f2, f3, f4);
+                uint8_t key[33]; lic_xor_dec(LIC_KEY_C, sizeof LIC_KEY_C, (char *)key);
+                uint8_t mac[32]; hmac_sha256(key, 32, payload, strlen(payload), mac);
+                char hex[65]; for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", mac[i]);
+                if (!strcmp(hex, f5)) {
+                    long exp = strtol(f4, NULL, 10);
+                    if (exp_out) *exp_out = exp;
+                    if (qq_out) snprintf(qq_out, 16, "%s", f2);
+                    rc = (exp < (long)time(NULL)) ? 3 : 0;
+                }
+            }
+        }
+    }
+    fclose(f);
+    return rc;
+}
+
+static int license_write(const char *qq, const char *path) {
+    long now = (long)time(NULL), exp = now + LIC_DAYS * 86400L;
+    char payload[128];
+    snprintf(payload, sizeof payload, "%s|%s|%ld|%ld", LIC_PREFIX, qq, now, exp);
+    uint8_t key[33]; lic_xor_dec(LIC_KEY_C, sizeof LIC_KEY_C, (char *)key);
+    uint8_t mac[32]; hmac_sha256(key, 32, payload, strlen(payload), mac);
+    char hex[65]; for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", mac[i]);
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    fprintf(f, "%s|%s\n", payload, hex);
+    fclose(f);
+    chmod(path, 0600);
+    return 0;
+}
+
+/* 名单检查: 1=在群 0=不在 -1=名单无效(缺GROUP头/不可读) */
+static int members_lookup(const char *path, const char *qq) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char grp[16]; lic_group(grp);
+    char line[512];
+    int found = 0, group_ok = 0;
+    while (fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\r' || *p == '\n' || *p == 0) continue;
+        char *e = p + strlen(p);
+        while (e > p && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
+        if (!strncmp(p, "GROUP=", 6)) {
+            if (!strcmp(p + 6, grp)) group_ok = 1;
+            continue;
+        }
+        char tok[32];
+        if (sscanf(p, "%31s", tok) != 1) continue;
+        for (char *c = tok; *c; c++) if (!isdigit((unsigned char)*c)) { *c = 0; break; }
+        if (tok[0] && !strcmp(tok, qq)) found = 1;
+    }
+    fclose(f);
+    return group_ok ? found : -1;
+}
+
+static int download_members(const char *dst) {
+    static const char *fetchers[] = {
+        "curl -fsSL -m 30 -o '%s' '%s'",
+        "timeout 30 wget -q -O '%s' '%s'",
+        "wget -q -O '%s' '%s'",
+        "/data/adb/magisk/busybox wget -q -O '%s' '%s'",
+        NULL };
+    char url[512], cmd[1300];
+    for (int ui = 0; ui < 2; ui++) {
+        lic_xor_dec(ui ? URL2_C : URL1_C, ui ? sizeof URL2_C : sizeof URL1_C, url);
+        for (int fi = 0; fetchers[fi]; fi++) {
+            snprintf(cmd, sizeof cmd, fetchers[fi], dst, url);
+            if (system(cmd) == 0) {
+                FILE *t = fopen(dst, "r");
+                if (t) { fclose(t); return 0; }
+            }
+        }
+    }
+    return -1;
+}
+
+static int cmd_license(void) {
+    char qq[16]; long exp = 0;
+    int rc = license_check(qq, &exp);
+    char when[24] = "";
+    if (rc == 0 || rc == 3) {
+        time_t t = (time_t)exp;
+        struct tm *tm = localtime(&t);
+        if (tm) strftime(when, sizeof when, "%Y-%m-%d", tm);
+    }
+    switch (rc) {
+    case 0:  printf("LICENSE=ok QQ=%s EXPIRY=%ld EXPIRY_DATE=%s\n", qq, exp, when); return 0;
+    case 1:  printf("LICENSE=none\n"); return 1;
+    case 3:  printf("LICENSE=expired QQ=%s EXPIRY=%ld EXPIRY_DATE=%s\n", qq, exp, when); return 1;
+    default: printf("LICENSE=bad\n"); return 1;
+    }
+}
+
+static int cmd_verify(const char *qq, const char *members_override) {
+    size_t ql = strlen(qq);
+    int qok = (ql >= 5 && ql <= 11 && qq[0] != '0');
+    for (size_t i = 0; qok && i < ql; i++) if (!isdigit((unsigned char)qq[i])) qok = 0;
+    if (!qok) {
+        printf("VERIFIED=0 REASON=bad_qq\n");
+        fprintf(stderr, "[验证] QQ号格式无效 (5-11位数字, 不以0开头)\n");
+        return 1;
+    }
+    char grp[16]; lic_group(grp);
+    char mpath[512];
+    int look = -1;
+#ifdef LIC_TEST_MEMBERS
+    /* 仅测试构建: 允许指定本地名单文件 */
+    if (members_override) snprintf(mpath, sizeof mpath, "%s", members_override);
+    else snprintf(mpath, sizeof mpath, "%s", members_cache_path());
+    look = members_lookup(mpath, qq);
+#else
+    (void)members_override;
+    snprintf(mpath, sizeof mpath, "%s", members_cache_path());
+    int look_cache = members_lookup(mpath, qq);
+    char tmp[540];
+    snprintf(tmp, sizeof tmp, "%s.tmp", mpath);
+    if (download_members(tmp) == 0) {
+        int lt = members_lookup(tmp, qq);
+        if (lt >= 0) {      /* 名单有效 (含 GROUP 头): 无论在不在群都以云端为准 */
+            rename(tmp, mpath);
+            look = lt;
+        } else {
+            unlink(tmp);
+        }
+    }
+    if (look < 0) {
+        if (look_cache >= 0) look = look_cache;   /* 离线回退: 上次成功拉取的缓存 */
+        else {
+            FILE *t = fopen(mpath, "r");
+            int have = (t != NULL);
+            if (t) fclose(t);
+            printf("VERIFIED=0 REASON=%s\n", have ? "list_invalid" : "download_failed");
+            fprintf(stderr, "[验证] %s\n", have ? "云端名单无效 (缺GROUP头), 请联系群主" : "无法联网获取群成员名单, 请检查网络");
+            return 1;
+        }
+    }
+#endif
+    if (look < 0) { printf("VERIFIED=0 REASON=list_invalid\n"); fprintf(stderr, "[验证] 名单无效 (缺GROUP头)\n"); return 1; }
+    if (look == 0) {
+        printf("VERIFIED=0 REASON=not_in_group\n");
+        fprintf(stderr, "[验证] QQ %s 不在群 %s 成员名单中\n", qq, grp);
+        fprintf(stderr, "[验证] 请先加入QQ群, 加群后需等待群主同步名单\n");
+        return 1;
+    }
+    if (license_write(qq, license_path()) != 0) {
+        printf("VERIFIED=0 REASON=write_failed\n");
+        fprintf(stderr, "[验证] 授权写入失败: %s\n", license_path());
+        return 1;
+    }
+    char lqq[16]; long lexp = 0;
+    license_check(lqq, &lexp);
+    char when[24] = "";
+    struct tm *tm = localtime(&(time_t){ (time_t)lexp });
+    if (tm) strftime(when, sizeof when, "%Y-%m-%d", tm);
+    printf("VERIFIED=1 QQ=%s EXPIRY=%ld EXPIRY_DATE=%s\n", qq, lexp, when);
+    fprintf(stderr, "[验证] 验证成功, 授权30天 (至 %s)\n", when);
+    return 0;
+}
+
 
 typedef struct { uint64_t s[8]; uint64_t len; uint8_t buf[128]; size_t buflen; } Sha512;
 static const uint64_t K512[80] = {
@@ -2651,6 +2874,10 @@ int main(int argc, char **argv) {
             "用法:\n"
             "  dtbo_oc identify --img X --dtc PATH [--workdir D]\n"
             "      输出 DEVICE=ace2pro|op12|op13|op13t|op15|op15t|ace3|ace3pro|ace5|ace6|ace6t|gt8|gt8p|gt7p|gt7s|op11|unknown\n"
+            "  dtbo_oc license\n"
+            "      检查QQ群验证授权 (LICENSE=ok|none|expired|bad)\n"
+            "  dtbo_oc verify --qq QQ号\n"
+            "      联网校验QQ是否在群成员名单, 通过后写入30天授权 (需网络)\n"
             "  dtbo_oc info --img X [--dtc PATH --workdir D]\n"
             "  dtbo_oc checkoc --img X --stock-img Y --dtc PATH [--workdir D]\n"
             "      检测 X 相对 Y 的超频/缺失/陌生家族节点 (NOC/MISSING/FOREIGN)\n"
@@ -2678,6 +2905,7 @@ int main(int argc, char **argv) {
     const char *img = NULL, *out = NULL, *dtc = NULL, *workdir = "/tmp/dtbo_oc_work";
     const char *hz = NULL, *wxh = NULL, *exclude = "raw", *include = "", *cov = "";
     const char *stock = NULL;
+    const char *qq = NULL, *members = NULL;
     int battery = 0;
     uint32_t strip_above = 0;
     double mlow = 1.012205, mhigh = 1.021537;
@@ -2697,6 +2925,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--margin-high") && i+1 < argc) mhigh = atof(argv[++i]);
         else if (!strcmp(argv[i], "--battery") && i+1 < argc) battery = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--strip-above") && i+1 < argc) strip_above = (uint32_t)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--qq") && i+1 < argc) qq = argv[++i];
+        else if (!strcmp(argv[i], "--members") && i+1 < argc) members = argv[++i];
         else if (!strcmp(argv[i], "--no-phy")) no_phy = 1;
         else if (!strcmp(argv[i], "--gt7p")) gt7p = 1;
         else if (!strcmp(argv[i], "--multifam")) multifam = 1;
@@ -2705,6 +2935,14 @@ int main(int argc, char **argv) {
         else die("未知参数: %s", argv[i]);
     }
     if (!strcmp(cmd, "keys")) return cmd_keys();
+    if (!strcmp(cmd, "license")) return cmd_license();
+    if (!strcmp(cmd, "verify")) {
+        if (!qq) die("verify 需要 --qq QQ号");
+#ifndef LIC_TEST_MEMBERS
+        if (members) die("本构建不支持 --members (仅测试构建)");
+#endif
+        return cmd_verify(qq, members);
+    }
     if (!img) die("缺少 --img");
     if (!strcmp(cmd, "identify")) {
         if (!dtc) die("identify 需要 --dtc");
@@ -2719,6 +2957,18 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "patch")) {
         if (!out || !dtc) die("patch 需要 --out --dtc");
+        {   /* v2.36 QQ 群验证门禁: 无有效授权拒绝生成任何补丁 (exit 4) */
+            char lqq[16]; long lexp;
+            int lc = license_check(lqq, &lexp);
+            if (lc != 0) {
+                char grp[16]; lic_group(grp);
+                fprintf(stderr, "[验证] 未通过QQ群验证, 拒绝生成补丁 (%s)\n",
+                        lc == 1 ? "未验证" : lc == 3 ? "授权已过期" : "授权文件无效");
+                fprintf(stderr, "[验证] 请加入QQ群 %s, 在模块 WebUI [群验证] 或终端菜单完成验证\n", grp);
+                fprintf(stderr, "[验证] 授权有效期30天, 到期后需重新验证\n");
+                return 4;
+            }
+        }
         if (battery < 0 || battery > 6) die("--battery 取值 0/1/2/3/4/5/6");
         if (battery == 6 && !gt7p) die("--battery 6 (GT7P 解容) 需配合 --gt7p 使用");
         PatchCfg cfg; memset(&cfg, 0, sizeof(cfg));
