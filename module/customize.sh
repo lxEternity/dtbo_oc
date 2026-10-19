@@ -16,18 +16,8 @@ if [ "$ARCH64" != "arm64-v8a" ]; then
     abort
 fi
 
-LOCKED=$(getprop ro.boot.flash.locked)
-VBS=$(getprop ro.boot.verifiedbootstate)
-if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
-    ui_print "*********************************************************"
-    ui_print " !! 警告: Bootloader 检测为锁定/校验状态 !!"
-    ui_print " !! 未解锁 BL 刷入修改后的 DTBO 会导致无法开机(变砖) !!"
-    ui_print " !! (Recovery 环境下该检测可能误报, 请以实际解锁状态为准) !!"
-    ui_print "*********************************************************"
-fi
-
 ui_print "*******************************"
-ui_print " 超频解容模块 (多机型) v2.38"
+ui_print " 超频解容模块 (多机型) v2.3.7"
 ui_print "*******************************"
 ui_print "- 安全架构: 安装零分区写入, 不碰校验分区"
 ui_print "- 安装二进制: dtbo_oc + dtc (静态 arm64)"
@@ -68,11 +58,7 @@ case "$LICOUT" in
             VEXP=$(printf '%s\n' "$VOUT" | sed -n 's/.*EXPIRY_DATE=//p')
             ui_print "  验证通过: 本机QQ $VQQ 在群内, 授权30天 (至 $VEXP)"
         elif [ "$VREASON" = "not_in_group" ]; then
-            ui_print "*********************************************************"
-            ui_print " !! 本机QQ未加入指定QQ群, 禁止刷入 !!"
-            ui_print " !! 正在打开QQ群卡片, 请申请加群       !!"
-            ui_print " !! 加群并经群主同步名单后, 重新安装本模块即可 !!"
-            ui_print "*********************************************************"
+            ui_print "  本机QQ未加入指定QQ群, 已打开QQ群卡片, 加群后重新安装"
             "$TOOL" joingroup 2>/dev/null
             abort
         elif [ "$VREASON" = "not_in_group_cached" ]; then
@@ -280,14 +266,6 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
         ui_choose "选择超频方案:" "DTBO 补丁 (重启生效)|KO 内核挂载 (不改DTBO, 重启生效)" "$MODE_INIT"
         OC_MODE=$([ "$SEL" = "1" ] && echo ko || echo dtbo)
         if [ "$OC_MODE" = "ko" ] && [ "$DEVICE" = "ace6" ]; then
-            ui_print " "
-            ui_print "*********************************************************"
-            ui_print " !! 一加ACE6 (PLQ110) KO 风险警告 !!"
-            ui_print " !! 该 KO 未经真机验证, 且本机内核为 !!"
-            ui_print " !! PANIC_ON_OOPS + KASAN 配置 !!"
-            ui_print " !! 若加载异常将直接无法开机, 需进 Recovery !!"
-            ui_print " !! 移除本模块才能恢复 !!"
-            ui_print "*********************************************************"
             ui_choose "确认: 仍要在 ACE6 上启用 KO 方案?" "否, 改用 DTBO 补丁 (推荐)|是, 我已知晓无法开机风险" 0
             [ "$SEL" = "0" ] && { OC_MODE=dtbo; ui_print "- 已改用 DTBO 补丁"; }
         fi
@@ -346,7 +324,6 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
     fi
 
     if [ "$BATT_OK" = "1" ] && { [ "$BATTERY" = "3" ] || [ "$BATTERY" = "4" ]; }; then
-        ui_print "  !! 非魔改电池勿选, 可能导致过充/鼓包 !!"
         ui_choose "确认: 设备是否已更换 6100mAh 魔改电池?" "否, 改回原版电池|是, 确认已更换" 0
         [ "$SEL" = "0" ] && { BATTERY=0; ui_print "- 已改回原版电池"; }
     fi
@@ -415,12 +392,7 @@ elif [ "$BATTERY" = "6" ]; then
 fi
 case "$BATTERY" in
     3|4)
-        ui_print "*********************************************************"
-        ui_print " !! 已选择 6100mAh 魔改电池选项 (BATTERY=$BATTERY) !!"
-        ui_print " !! 含: 关机电压 3.0V / 1% 3.05V / 满充 4.54V !!"
-        ui_print " !! 仅适用于已更换 6100mAh 魔改电池的设备 !!"
-        ui_print " !! 非魔改电池请勿使用, 否则可能过充/鼓包 !!"
-        ui_print "*********************************************************"
+        ui_print "- 已选择: 6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)"
         ;;
     2|5)
         ui_print "- 已选择: 电池解容 (关机 2.8V / 1% 2.85V / 显示真实电量)"
@@ -462,7 +434,7 @@ else
 fi
 
 ui_print " "
-ui_print "- v2.38 QQ群验证+主板ID绑定, WebUI 主题定制"
+ui_print "- v2.3.7 QQ群验证+主板ID绑定, WebUI 主题定制"
 ui_print "  (未入群将打开QQ群卡片并阻止刷入; 已验证授权30天)"
 ui_print "- 安全架构: 安装过程不写入任何分区"
 ui_print "  重启后 service.sh 自动: 备份原厂 -> 生成补丁 -> 刷入 dtbo"

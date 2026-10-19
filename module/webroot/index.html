@@ -17,20 +17,19 @@
         <button id="theme-btn" class="icon-button" type="button" aria-label="主题定制"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.9 2-2 0-.6-.2-1-.6-1.4-.3-.4-.6-.8-.6-1.4 0-1.1.9-2 2-2h2.2A4 4 0 0 0 21 10c-.6-4-4.4-7-9-7Z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15" cy="7.5" r="1"/></svg></button>
         <button id="refresh" class="icon-button" type="button" aria-label="刷新当前状态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.2 7a7 7 0 0 1 11.5-1L20 9M4 15l2.3 3A7 7 0 0 0 17.8 17"/></svg></button>
       </div>
+      <div id="theme-panel" class="theme-panel" hidden>
+        <div class="tp-title">主题定制</div>
+        <div class="tp-row"><span>外观模式</span><span class="tp-btns" id="mode-seg"><button class="mini-btn ghost" type="button" data-mode="auto">跟随系统</button><button class="mini-btn ghost" type="button" data-mode="dark">暗色</button><button class="mini-btn ghost" type="button" data-mode="light">亮色</button></span></div>
+        <div class="tp-row"><span>主题色</span><span class="tp-btns" id="accent-row"><button class="swatch" type="button" data-accent="green" aria-label="翠绿" aria-pressed="true"></button><button class="swatch" type="button" data-accent="cyan" aria-label="湖蓝" aria-pressed="false"></button><button class="swatch" type="button" data-accent="violet" aria-label="紫罗兰" aria-pressed="false"></button><button class="swatch" type="button" data-accent="amber" aria-label="琥珀" aria-pressed="false"></button><button class="swatch" type="button" data-accent="rose" aria-label="玫红" aria-pressed="false"></button></span></div>
+        <div class="tp-row"><span>背景图片</span><span class="tp-btns"><button id="bg-pick" class="mini-btn" type="button">选择</button><button id="bg-clear" class="mini-btn ghost" type="button">清除</button></span></div>
+        <label class="tp-row"><span>背景浓度</span><input id="bg-show" type="range" min="0" max="1" step="0.05"></label>
+        <label class="tp-row"><span>卡片不透明度</span><input id="card-alpha" type="range" min="0" max="1" step="0.05"></label>
+        <label class="tp-row"><span>控件不透明度</span><input id="ctl-alpha" type="range" min="0" max="1" step="0.05"></label>
+        <label class="tp-row"><span>液态玻璃效果</span><input id="glass-toggle" type="checkbox" role="switch"></label>
+        <label class="tp-row"><span>按钮悬浮效果</span><input id="hover-toggle" type="checkbox" role="switch"></label>
+        <input id="bg-file" type="file" accept="image/*" hidden>
+      </div>
     </header>
-
-    <div id="theme-panel" class="theme-panel" hidden>
-      <div class="tp-title">主题定制</div>
-      <div class="tp-row"><span>外观模式</span><span class="tp-btns" id="mode-seg"><button class="mini-btn ghost" type="button" data-mode="auto">跟随系统</button><button class="mini-btn ghost" type="button" data-mode="dark">暗色</button><button class="mini-btn ghost" type="button" data-mode="light">亮色</button></span></div>
-      <div class="tp-row"><span>主题色</span><span class="tp-btns" id="accent-row"><button class="swatch" type="button" data-accent="green" aria-label="翠绿" aria-pressed="true"></button><button class="swatch" type="button" data-accent="cyan" aria-label="湖蓝" aria-pressed="false"></button><button class="swatch" type="button" data-accent="violet" aria-label="紫罗兰" aria-pressed="false"></button><button class="swatch" type="button" data-accent="amber" aria-label="琥珀" aria-pressed="false"></button><button class="swatch" type="button" data-accent="rose" aria-label="玫红" aria-pressed="false"></button></span></div>
-      <div class="tp-row"><span>背景图片</span><span class="tp-btns"><button id="bg-pick" class="mini-btn" type="button">选择</button><button id="bg-clear" class="mini-btn ghost" type="button">清除</button></span></div>
-      <label class="tp-row"><span>背景浓度</span><input id="bg-show" type="range" min="0" max="1" step="0.05"></label>
-      <label class="tp-row"><span>卡片不透明度</span><input id="card-alpha" type="range" min="0.15" max="1" step="0.05"></label>
-      <label class="tp-row"><span>控件不透明度</span><input id="ctl-alpha" type="range" min="0.15" max="1" step="0.05"></label>
-      <label class="tp-row"><span>液态玻璃效果</span><input id="glass-toggle" type="checkbox" role="switch"></label>
-      <label class="tp-row"><span>按钮悬浮效果</span><input id="hover-toggle" type="checkbox" role="switch"></label>
-      <input id="bg-file" type="file" accept="image/*" hidden>
-    </div>
 
     <div class="title-row"><div><h1>超频控制</h1><p class="subtitle"><span id="device-name">正在识别机型…</span> <span>·</span> <span id="device-rate">—</span></p></div><span id="connection" class="badge">正在连接</span></div>
 
@@ -84,7 +83,7 @@
       <button id="restore" class="restore-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>恢复原厂 (DTBO + KO)</button>
     </section>
 
-    <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> v2.38</footer>
+    <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> v2.3.7</footer>
   </main>
   <script type="module" src="app.js"></script>
 </body>

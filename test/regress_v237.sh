@@ -94,8 +94,8 @@ echo "$OUT" | grep -q '验证通过: 本机QQ 10001 在群内' && ok "安装自�
 # 10b: 未入群 → abort + 打开群卡片提示
 rm -f "$D/license"
 OUT=$(LIC_AUTO_DIRS=$W/qq2/databases runinst); RC=$?
-echo "$OUT" | grep -q '本机QQ未加入指定QQ群, 禁止刷入' && ok "未入群阻止提示" || bad "无阻止提示"
-echo "$OUT" | grep -q '正在打开QQ群卡片' && ok "跳转QQ群提示" || bad "无跳转提示"
+echo "$OUT" | grep -q '本机QQ未加入指定QQ群' && ok "未入群阻止提示" || bad "无阻止提示"
+echo "$OUT" | grep -q '已打开QQ群卡片' && ok "跳转QQ群提示" || bad "无跳转提示"
 [ "$RC" != "0" ] && ok "安装 abort (rc=$RC)" || bad "未 abort"
 # 10c: license 已有效 → 跳过
 rm -f "$D/license"

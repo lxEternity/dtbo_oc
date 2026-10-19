@@ -294,7 +294,7 @@ emit_status() {
     printf '"oc_active":%s,' "$OC_ACTIVE"
     printf '"ko":{"available":%s,"builtin":%s,"loaded":%s,"installed":%s,"vermatch":%s,"file":' "$KO_AVAIL" "$KO_BUILTIN" "$KO_LOADED" "$KO_INSTALLED" "${KO_VERMATCH:-null}"
     printf '%s' "${KO_FILE:-}" | json_string
-    printf '},"dtbo_patched":%s,"stock_ok":%s,"version":"v2.38","machine":' "$DTBO_PATCHED" "$([ -f "$STOCK" ] && echo 1 || echo 0)"
+    printf '},"dtbo_patched":%s,"stock_ok":%s,"version":"v2.3.7","machine":' "$DTBO_PATCHED" "$([ -f "$STOCK" ] && echo 1 || echo 0)"
     printf '%s' "$MACHINE" | json_string
     printf ',"license":{"state":"%s","qq":' "$LIC_STATE"
     printf '%s' "$LIC_QQ" | json_string

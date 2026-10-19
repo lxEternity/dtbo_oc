@@ -47,13 +47,13 @@ font-family:system-ui,-apple-system,"Noto Sans SC","Microsoft YaHei",sans-serif}
 --accent-strong:#99174a;--accent-soft:#cd3f6e;--accent-line:#f0b9cd}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{margin:0;background:radial-gradient(900px 620px at 88% -12%,var(--glow) 0%,var(--bg) 58%);color:var(--text);font-size:13px;line-height:1.5}
-#bg-layer{position:fixed;inset:0;z-index:-1;pointer-events:none;background-size:cover;background-position:center;background-repeat:no-repeat;opacity:var(--bg-show)}
+#bg-layer{position:fixed;inset:0;z-index:0;pointer-events:none;background-size:cover;background-position:center;background-repeat:no-repeat;opacity:var(--bg-show)}
 button{font:inherit;color:inherit;cursor:pointer;touch-action:manipulation;transition:transform .18s ease,box-shadow .18s ease,filter .18s ease,background .18s ease,border-color .18s ease}
 button:disabled{cursor:default;opacity:.45}
 button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 h1,h2,p{margin:0}
-.app{max-width:500px;padding:18px 18px calc(18px + env(safe-area-inset-bottom));margin:auto;padding-top:calc(18px + env(safe-area-inset-top))}
+.app{position:relative;z-index:1;max-width:500px;padding:18px 18px calc(18px + env(safe-area-inset-bottom));margin:auto;padding-top:calc(18px + env(safe-area-inset-top))}
 .topbar{position:relative;display:flex;align-items:center;justify-content:space-between;margin-bottom:26px}
 .top-actions{display:flex;gap:8px}
 .brand{display:flex;align-items:center;gap:9px;font-size:11px;letter-spacing:1.2px;font-weight:750}
