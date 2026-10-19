@@ -27,7 +27,7 @@ if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
 fi
 
 ui_print "*******************************"
-ui_print " 超频解容模块 (多机型) v2.36"
+ui_print " 超频解容模块 (多机型) v2.37"
 ui_print "*******************************"
 ui_print "- 安全架构: 安装零分区写入, 不碰校验分区"
 ui_print "- 安装二进制: dtbo_oc + dtc (静态 arm64)"
@@ -39,8 +39,9 @@ mkdir -p "$MODPATH/bin" "$MODPATH/ko" 2>/dev/null
 
 "$TOOL" >/dev/null 2>&1; BINRC=$?
 if [ "$BINRC" -ge 126 ]; then
-    ui_print "! 警告: dtbo_oc 二进制无法执行 (rc=$BINRC)"
-    ui_print "! 模块继续安装, 开机后 service.sh 将重试"
+    ui_print "! dtbo_oc 二进制无法执行 (rc=$BINRC)"
+    ui_print "! 无法进行QQ群验证, 中止安装"
+    abort
 fi
 
 DATA_DIR=/data/adb/dtbo_oc
@@ -49,6 +50,43 @@ STOCK="$DATA_DIR/dtbo_stock.img"
 CONFIG="$DATA_DIR/config"
 LOG="$DATA_DIR/install.log"
 mkdir -p "$DATA_DIR" "$WORK" "$DATA_DIR/ko"
+
+# ---- v2.37 QQ群验证: 安装时自动检测本机QQ并联网核对群名单 ----
+LICOUT=$("$TOOL" license 2>/dev/null)
+case "$LICOUT" in
+    LICENSE=ok*)
+        LIC_QQ=$(printf '%s\n' "$LICOUT" | sed -n 's/^LICENSE=ok QQ=\([0-9]*\) .*/\1/p')
+        LIC_EXP=$(printf '%s\n' "$LICOUT" | sed -n 's/.*EXPIRY_DATE=//p')
+        ui_print "- QQ群验证: 已通过 (QQ $LIC_QQ, 有效期至 $LIC_EXP), 跳过"
+        ;;
+    *)
+        ui_print "- QQ群验证: 自动检测本机QQ并联网核对群名单..."
+        VOUT=$("$TOOL" verify --auto 2>&1)
+        VRC=$?
+        VREASON=$(printf '%s\n' "$VOUT" | sed -n 's/.*REASON=//p')
+        if [ "$VRC" = "0" ]; then
+            VQQ=$(printf '%s\n' "$VOUT" | sed -n 's/^VERIFIED=1 QQ=\([0-9]*\).*/\1/p')
+            VEXP=$(printf '%s\n' "$VOUT" | sed -n 's/.*EXPIRY_DATE=//p')
+            ui_print "  验证通过: 本机QQ $VQQ 在群内, 授权30天 (至 $VEXP)"
+        elif [ "$VREASON" = "not_in_group" ]; then
+            ui_print "*********************************************************"
+            ui_print " !! 本机QQ未加入指定QQ群, 禁止刷入 !!"
+            ui_print " !! 正在打开QQ群卡片, 请申请加群       !!"
+            ui_print " !! 加群并经群主同步名单后, 重新安装本模块即可 !!"
+            ui_print "*********************************************************"
+            "$TOOL" joingroup 2>/dev/null
+            abort
+        else
+            case "$VREASON" in
+                no_local_qq)     ui_print "  未检测到本机QQ账号, 安装后可在 WebUI/菜单手动验证" ;;
+                download_failed) ui_print "  无法联网拉取群名单, 安装后可在 WebUI/菜单重新验证" ;;
+                list_invalid)    ui_print "  云端群名单无效, 请联系群主" ;;
+                *)               ui_print "  自动验证未完成, 安装后可在 WebUI/菜单验证" ;;
+            esac
+            ui_print "  (模块可安装; 未验证前不会修改DTBO/不会挂载KO)"
+        fi
+        ;;
+esac
 
 SLOT=$(getprop ro.boot.slot_suffix)
 DTBO=""
@@ -422,8 +460,8 @@ else
 fi
 
 ui_print " "
-ui_print "- v2.36 QQ群验证: 使用超频/刷入功能需先验证QQ已入群"
-ui_print "  (WebUI 或终端菜单输入QQ号联网验证, 授权30天)"
+ui_print "- v2.37 QQ群验证: 安装时自动检测本机QQ并联网核对群名单"
+ui_print "  (未入群将打开QQ群卡片并阻止刷入; 已验证授权30天)"
 ui_print "- 安全架构: 安装过程不写入任何分区"
 ui_print "  重启后 service.sh 自动: 备份原厂 -> 生成补丁 -> 刷入 dtbo"
 ui_print "  (第 1 次重启: 备份并刷入; 第 2 次重启: 新档位完整生效)"

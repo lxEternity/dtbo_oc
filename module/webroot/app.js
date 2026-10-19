@@ -309,19 +309,26 @@ async function restore() {
   }
 }
 
-async function verify() {
+async function verify(auto = false) {
   if (busy) return;
-  const qq = $('qq-input').value.trim();
-  if (!/^[1-9][0-9]{4,10}$/.test(qq)) {
-    notify('请输入正确的QQ号 (5-11位数字, 不以0开头)', true);
-    return;
+  let arg;
+  if (auto) {
+    arg = 'auto=1';
+  } else {
+    const qq = $('qq-input').value.trim();
+    if (!/^[1-9][0-9]{4,10}$/.test(qq)) {
+      notify('请输入正确的QQ号 (5-11位数字, 不以0开头)', true);
+      return;
+    }
+    arg = `qq=${qq}`;
   }
   busy = true;
   controls();
   $('verify-btn').disabled = true;
-  notify('正在联网验证QQ群成员身份… (需拉取群成员名单, 请稍候)');
+  $('verify-auto-btn').disabled = true;
+  notify(auto ? '正在自动检测本机QQ并联网验证…' : '正在联网验证QQ群成员身份…');
   try {
-    const result = await command(`verify qq=${qq}`, 120000);
+    const result = await command(`verify ${arg}`, 120000);
     notify(result.message || '验证成功。');
     $('qq-input').value = '';
     render(await command('status'));
@@ -330,6 +337,7 @@ async function verify() {
   } finally {
     busy = false;
     $('verify-btn').disabled = false;
+    $('verify-auto-btn').disabled = false;
     controls();
   }
 }
@@ -352,7 +360,8 @@ $('ltpo-off').addEventListener('change', () => {
 $('refresh').addEventListener('click', () => refresh(true));
 $('apply').addEventListener('click', apply);
 $('restore').addEventListener('click', restore);
-$('verify-btn').addEventListener('click', verify);
+$('verify-btn').addEventListener('click', () => verify());
+$('verify-auto-btn').addEventListener('click', () => verify(true));
 $('qq-input').addEventListener('keydown', event => {
   if (event.key === 'Enter') verify();
 });

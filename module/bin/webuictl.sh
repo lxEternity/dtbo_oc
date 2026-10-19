@@ -292,7 +292,7 @@ emit_status() {
     printf '"oc_active":%s,' "$OC_ACTIVE"
     printf '"ko":{"available":%s,"builtin":%s,"loaded":%s,"installed":%s,"vermatch":%s,"file":' "$KO_AVAIL" "$KO_BUILTIN" "$KO_LOADED" "$KO_INSTALLED" "${KO_VERMATCH:-null}"
     printf '%s' "${KO_FILE:-}" | json_string
-    printf '},"dtbo_patched":%s,"stock_ok":%s,"version":"v2.36"' "$DTBO_PATCHED" "$([ -f "$STOCK" ] && echo 1 || echo 0)"
+    printf '},"dtbo_patched":%s,"stock_ok":%s,"version":"v2.37"' "$DTBO_PATCHED" "$([ -f "$STOCK" ] && echo 1 || echo 0)"
     printf ',"license":{"state":"%s","qq":' "$LIC_STATE"
     printf '%s' "$LIC_QQ" | json_string
     printf ',"expiry":'
@@ -523,21 +523,29 @@ EOF
         ;;
     verify)
         shift
-        QQ=""
+        QQ=""; AUTO=0
         for kv in "$@"; do
             K=${kv%%=*}
-            [ "$K" = "qq" ] && QQ=${kv#*=}
+            case "$K" in
+                qq) QQ=${kv#*=} ;;
+                auto) AUTO=1 ;;
+            esac
         done
-        case "$QQ" in ''|*[!0-9]*|0*) fail "QQ号格式无效 (5-11位数字, 不以0开头)" ;; esac
-        QL=${#QQ}
-        if [ "$QL" -lt 5 ] || [ "$QL" -gt 11 ]; then fail "QQ号长度应为 5-11 位"; fi
-        VOUT=$("$TOOL" verify --qq "$QQ" 2>"$WORK/verify_err.txt")
+        if [ "$AUTO" = "1" ]; then
+            VOUT=$("$TOOL" verify --auto 2>"$WORK/verify_err.txt")
+        else
+            case "$QQ" in ''|*[!0-9]*|0*) fail "QQ号格式无效 (5-11位数字, 不以0开头)" ;; esac
+            QL=${#QQ}
+            if [ "$QL" -lt 5 ] || [ "$QL" -gt 11 ]; then fail "QQ号长度应为 5-11 位"; fi
+            VOUT=$("$TOOL" verify --qq "$QQ" 2>"$WORK/verify_err.txt")
+        fi
         VRC=$?
         if [ "$VRC" = "0" ]; then
             VEXP=$(printf '%s\n' "$VOUT" | sed -n 's/.*EXPIRY_DATE=//p')
+            if [ "$AUTO" = "1" ]; then VMSG="自动验证通过 (本机QQ在群内), 授权30天 (有效期至 ${VEXP:-未知})"; else VMSG="QQ群验证通过, 授权30天 (有效期至 ${VEXP:-未知})"; fi
             lic_query
             printf '{"ok":true,"message":'
-            printf '%s' "QQ群验证通过, 授权30天 (有效期至 ${VEXP:-未知})" | json_string
+            printf '%s' "$VMSG" | json_string
             printf ',"license":{"state":"%s","qq":' "$LIC_STATE"
             printf '%s' "$LIC_QQ" | json_string
             printf ',"expiry":'
@@ -548,7 +556,8 @@ EOF
         REASON=$(printf '%s\n' "$VOUT" | sed -n 's/.*REASON=//p')
         case "$REASON" in
             bad_qq)          fail "QQ号格式无效 (5-11位数字, 不以0开头)" ;;
-            not_in_group)    fail "该QQ号不在群成员名单中; 请先加入QQ群, 加群后需等待群主同步名单" ;;
+            not_in_group)    if [ "$AUTO" = "1" ]; then fail "本机QQ均不在群成员名单中; 请先加入QQ群, 加群后需等待群主同步名单"; else fail "该QQ号不在群成员名单中; 请先加入QQ群, 加群后需等待群主同步名单"; fi ;;
+            no_local_qq)     fail "未在本机检测到QQ/TIM账号, 请手动输入QQ号验证" ;;
             list_invalid)    fail "云端群成员名单无效 (缺少群号标识), 请联系群主" ;;
             download_failed) fail "无法联网获取群成员名单, 请检查网络后重试" ;;
             write_failed)    fail "授权写入失败, 请重试" ;;

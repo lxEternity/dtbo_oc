@@ -338,6 +338,178 @@ static int cmd_verify(const char *qq, const char *members_override) {
     return 0;
 }
 
+/* ---------------- v2.37 自动验证: 扫描本机 QQ/TIM 账号 ---------------- */
+
+#define QQ_MAX 32
+
+static int qq_valid(const char *s) {
+    size_t l = strlen(s);
+    if (l < 5 || l > 11 || s[0] == '0') return 0;
+    for (size_t i = 0; i < l; i++) if (!isdigit((unsigned char)s[i])) return 0;
+    return 1;
+}
+
+static void qq_add(char list[][16], int *n, int cap, const char *qq) {
+    if (!qq_valid(qq)) return;
+    for (int i = 0; i < *n; i++) if (!strcmp(list[i], qq)) return;
+    if (*n < cap) snprintf(list[(*n)++], 16, "%s", qq);
+}
+
+/* 目录条目: 纯数字命名 (剥 .db/.xml/.so 后缀) 即候选QQ (经典QQ: <uin>.db) */
+static void qq_scan_dir(const char *dir, char list[][16], int *n, int cap) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        char nm[256];
+        snprintf(nm, sizeof nm, "%s", e->d_name);
+        char *dot = strrchr(nm, '.');
+        if (dot && (!strcmp(dot, ".db") || !strcmp(dot, ".xml") || !strcmp(dot, ".so"))) *dot = 0;
+        qq_add(list, n, cap, nm);
+    }
+    closedir(d);
+}
+
+/* shared_prefs XML: 扫描 ...uin...">数字< 模式 (登录账号, 兼容NT QQ) */
+static void qq_scan_xml(const char *dir, char list[][16], int *n, int cap) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    char path[600];
+    while ((e = readdir(d))) {
+        size_t nl = strlen(e->d_name);
+        if (nl < 5 || strcmp(e->d_name + nl - 4, ".xml")) continue;
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        FILE *f = fopen(path, "rb");
+        if (!f) continue;
+        fseek(f, 0, SEEK_END); long fsz = ftell(f); fseek(f, 0, SEEK_SET);
+        if (fsz <= 0 || fsz > 1024 * 1024) { fclose(f); continue; }
+        char *buf = xmalloc((size_t)fsz + 1);
+        if (fread(buf, 1, (size_t)fsz, f) != (size_t)fsz) { free(buf); fclose(f); continue; }
+        buf[fsz] = 0;
+        fclose(f);
+        for (char *p = buf; (p = strcasestr(p, "uin")) != NULL; p += 3) {
+            char *gt = memchr(p, '>', 48);
+            if (!gt) continue;
+            char *q = gt + 1;
+            if (!isdigit((unsigned char)*q)) continue;
+            char num[16]; int k = 0;
+            while (q < buf + fsz && isdigit((unsigned char)*q) && k < 12) num[k++] = *q++;
+            num[k] = 0;
+            qq_add(list, n, cap, num);
+        }
+        free(buf);
+    }
+    closedir(d);
+}
+
+/* 收集本机候选QQ号 (QQ/TIM 数据目录), 返回候选数 */
+static int qq_scan_auto(char out[][16], int cap) {
+    int n = 0;
+#ifdef LIC_TEST_MEMBERS
+    const char *env = getenv("LIC_AUTO_DIRS");   /* 仅测试构建: 指定扫描根 (冒号分隔) */
+    if (env && *env) {
+        char roots[2048];
+        snprintf(roots, sizeof roots, "%s", env);
+        for (char *tok = strtok(roots, ":"); tok; tok = strtok(NULL, ":")) {
+            qq_scan_dir(tok, out, &n, cap);
+            qq_scan_xml(tok, out, &n, cap);
+        }
+        return n;
+    }
+#endif
+    static const char *dirs[] = {
+        "/data/data/com.tencent.mobileqq/databases",
+        "/data/data/com.tencent.mobileqq/files",
+        "/data/data/com.tencent.mobileqq",
+        "/data/data/com.tencent.tim/databases",
+        "/storage/emulated/0/Android/data/com.tencent.mobileqq/Tencent/MobileQQ",
+        NULL };
+    for (int i = 0; dirs[i]; i++) qq_scan_dir(dirs[i], out, &n, cap);
+    qq_scan_xml("/data/data/com.tencent.mobileqq/shared_prefs", out, &n, cap);
+    qq_scan_xml("/data/data/com.tencent.tim/shared_prefs", out, &n, cap);
+    return n;
+}
+
+/* 自动验证: 检测本机QQ -> 联网核对群名单 -> 在群则写入30天授权 */
+static int cmd_verify_auto(const char *members_override) {
+    char cands[QQ_MAX][16];
+    int n = qq_scan_auto(cands, QQ_MAX);
+    if (n <= 0) {
+        printf("VERIFIED=0 REASON=no_local_qq\n");
+        fprintf(stderr, "[验证] 未在本机检测到QQ/TIM账号 (未安装/多用户/数据隔离)\n");
+        fprintf(stderr, "[验证] 请手动输入QQ号验证\n");
+        return 1;
+    }
+    char grp[16]; lic_group(grp);
+    char mpath[512];
+#ifdef LIC_TEST_MEMBERS
+    if (members_override) snprintf(mpath, sizeof mpath, "%s", members_override);
+    else snprintf(mpath, sizeof mpath, "%s", members_cache_path());
+#else
+    (void)members_override;
+    snprintf(mpath, sizeof mpath, "%s", members_cache_path());
+    int have_cache = members_lookup(mpath, "0");
+    char tmp[540];
+    snprintf(tmp, sizeof tmp, "%s.tmp", mpath);
+    if (download_members(tmp) == 0 && members_lookup(tmp, "0") >= 0) rename(tmp, mpath);
+    else {
+        unlink(tmp);
+        if (have_cache < 0) {
+            FILE *t = fopen(mpath, "r");
+            int have = (t != NULL);
+            if (t) fclose(t);
+            printf("VERIFIED=0 REASON=%s\n", have ? "list_invalid" : "download_failed");
+            fprintf(stderr, "[验证] %s\n", have ? "云端名单无效 (缺GROUP头), 请联系群主" : "无法联网获取群成员名单, 请检查网络");
+            return 1;
+        }
+    }
+#endif
+    char hit[16] = "";
+    int look = 0;
+    for (int i = 0; i < n; i++) {
+        look = members_lookup(mpath, cands[i]);
+        if (look != 0) { if (look == 1) snprintf(hit, sizeof hit, "%s", cands[i]); break; }
+    }
+    if (look < 0) { printf("VERIFIED=0 REASON=list_invalid\n"); fprintf(stderr, "[验证] 名单无效 (缺GROUP头)\n"); return 1; }
+    if (look == 0) {
+        printf("VERIFIED=0 REASON=not_in_group\n");
+        fprintf(stderr, "[验证] 本机QQ账号均不在群 %s 成员名单中\n", grp);
+        fprintf(stderr, "[验证] 请先加入QQ群, 加群后需等待群主同步名单\n");
+        return 1;
+    }
+    if (license_write(hit, license_path()) != 0) {
+        printf("VERIFIED=0 REASON=write_failed\n");
+        fprintf(stderr, "[验证] 授权写入失败: %s\n", license_path());
+        return 1;
+    }
+    char lqq[16]; long lexp = 0;
+    license_check(lqq, &lexp);
+    char when[24] = "";
+    struct tm *tm = localtime(&(time_t){ (time_t)lexp });
+    if (tm) strftime(when, sizeof when, "%Y-%m-%d", tm);
+    printf("VERIFIED=1 QQ=%s EXPIRY=%ld EXPIRY_DATE=%s AUTO=1\n", hit, lexp, when);
+    fprintf(stderr, "[验证] 自动验证成功 (本机QQ %s), 授权30天 (至 %s)\n", hit, when);
+    return 0;
+}
+
+/* v2.37: 跳转QQ群卡片 (群号XOR内嵌, 不落明文; 打印链接并尝试 am start 拉起QQ) */
+static int cmd_joingroup(void) {
+    char grp[16]; lic_group(grp);
+    char uri[160];
+    snprintf(uri, sizeof uri,
+        "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=%s&card_type=group&source=qrcode", grp);
+    printf("QQLINK=%s\n", uri);
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        execlp("am", "am", "start", "-a", "android.intent.action.VIEW", "-d", uri, (char *)NULL);
+        _exit(127);
+    }
+    if (pid > 0) { int st; waitpid(pid, &st, 0); }
+    return 0;
+}
+
 
 typedef struct { uint64_t s[8]; uint64_t len; uint8_t buf[128]; size_t buflen; } Sha512;
 static const uint64_t K512[80] = {
@@ -2876,8 +3048,11 @@ int main(int argc, char **argv) {
             "      输出 DEVICE=ace2pro|op12|op13|op13t|op15|op15t|ace3|ace3pro|ace5|ace6|ace6t|gt8|gt8p|gt7p|gt7s|op11|unknown\n"
             "  dtbo_oc license\n"
             "      检查QQ群验证授权 (LICENSE=ok|none|expired|bad)\n"
-            "  dtbo_oc verify --qq QQ号\n"
+            "  dtbo_oc verify --qq QQ号 | --auto\n"
             "      联网校验QQ是否在群成员名单, 通过后写入30天授权 (需网络)\n"
+            "      --auto: 自动检测本机QQ/TIM账号并验证\n"
+            "  dtbo_oc joingroup\n"
+            "      打印QQ群卡片链接并尝试拉起QQ (验证未通过时跳转加群)\n"
             "  dtbo_oc info --img X [--dtc PATH --workdir D]\n"
             "  dtbo_oc checkoc --img X --stock-img Y --dtc PATH [--workdir D]\n"
             "      检测 X 相对 Y 的超频/缺失/陌生家族节点 (NOC/MISSING/FOREIGN)\n"
@@ -2906,6 +3081,7 @@ int main(int argc, char **argv) {
     const char *hz = NULL, *wxh = NULL, *exclude = "raw", *include = "", *cov = "";
     const char *stock = NULL;
     const char *qq = NULL, *members = NULL;
+    int auto_verify = 0;
     int battery = 0;
     uint32_t strip_above = 0;
     double mlow = 1.012205, mhigh = 1.021537;
@@ -2927,6 +3103,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--strip-above") && i+1 < argc) strip_above = (uint32_t)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--qq") && i+1 < argc) qq = argv[++i];
         else if (!strcmp(argv[i], "--members") && i+1 < argc) members = argv[++i];
+        else if (!strcmp(argv[i], "--auto")) auto_verify = 1;
         else if (!strcmp(argv[i], "--no-phy")) no_phy = 1;
         else if (!strcmp(argv[i], "--gt7p")) gt7p = 1;
         else if (!strcmp(argv[i], "--multifam")) multifam = 1;
@@ -2936,11 +3113,13 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "keys")) return cmd_keys();
     if (!strcmp(cmd, "license")) return cmd_license();
+    if (!strcmp(cmd, "joingroup")) return cmd_joingroup();
     if (!strcmp(cmd, "verify")) {
-        if (!qq) die("verify 需要 --qq QQ号");
 #ifndef LIC_TEST_MEMBERS
         if (members) die("本构建不支持 --members (仅测试构建)");
 #endif
+        if (auto_verify) return cmd_verify_auto(members);
+        if (!qq) die("verify 需要 --qq QQ号 或 --auto");
         return cmd_verify(qq, members);
     }
     if (!img) die("缺少 --img");

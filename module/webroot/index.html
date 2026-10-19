@@ -32,8 +32,9 @@
       <div class="verify-row">
         <input id="qq-input" class="qq-input" type="text" inputmode="numeric" maxlength="11" placeholder="输入QQ号" autocomplete="off" aria-label="QQ号">
         <button id="verify-btn" class="verify-button" type="button">验证</button>
+        <button id="verify-auto-btn" class="verify-button ghost" type="button">自动验证</button>
       </div>
-      <p class="hint">使用超频/刷入功能需先验证已加入指定QQ群 (验证需联网拉取群成员名单); 通过后授权30天, 到期需重新验证。</p>
+      <p class="hint">自动验证读取本机QQ/TIM账号并联网核对群名单; 也可手动输入QQ号。通过后授权30天, 到期自动重新验证。</p>
     </section>
 
     <section class="setting-section" aria-labelledby="rate-heading">
@@ -65,7 +66,7 @@
       <button id="restore" class="restore-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>恢复原厂 (DTBO + KO)</button>
     </section>
 
-    <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> v2.36</footer>
+    <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> v2.37</footer>
   </main>
   <script type="module" src="app.js"></script>
 </body>
