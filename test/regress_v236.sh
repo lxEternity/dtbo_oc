@@ -56,7 +56,7 @@ GRC=$?
 echo "=== 4. 正式构建联网E2E (拉取云端名单) ==="
 rm -rf /data/adb/dtbo_oc/members.txt
 mkdir -p /data/adb/dtbo_oc
-DTBO_OC_LICENSE=$W/e2e.lic $BS verify --qq 1935400047 >$W/e2e.log 2>&1 && grep -q '^VERIFIED=1' $W/e2e.log && ok "云端名单E2E验证" || { echo "  (网络不可用则跳过)"; tail -2 $W/e2e.log; }
+DTBO_OC_LICENSE=$W/e2e.lic $BS verify --qq 1526045421 >$W/e2e.log 2>&1 && grep -q '^VERIFIED=1' $W/e2e.log && ok "云端名单E2E验证" || { echo "  (网络不可用则跳过)"; tail -2 $W/e2e.log; }
 DTBO_OC_LICENSE=$W/e2e.lic $BS verify --qq 77777777 >>$W/e2e.log 2>&1 && bad "名单外应拒" || grep -q 'not_in_group' $W/e2e.log && ok "云端名单外QQ拒绝"
 
 echo "=== 5. 全机型 patch (有效license) ==="

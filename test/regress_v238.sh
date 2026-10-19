@@ -106,10 +106,15 @@ RC=$?
 
 echo "== 10. 云端 E2E (正式构建, GitHub 名单) =="
 rm -f cloudlic.txt
-OUT=$(DTBO_OC_LICENSE=$W/cloudlic.txt timeout 60 $S verify --qq 1935400047 2>/dev/null)
+# 1526045421: 永久授权且未限定机器码 (云端名单); 1935400047: 永久+限定 450530322,
+# 本沙箱主板ID不匹配 → 用于实测云端白名单拦截
+OUT=$(DTBO_OC_LICENSE=$W/cloudlic.txt timeout 60 $S verify --qq 1526045421 2>/dev/null)
 if echo "$OUT" | grep -q "VERIFIED=1"; then
     ok "云端验证通过"
-    grep -qE '\|0\|[0-9a-f]{64}' cloudlic.txt && ok "云端 license 含机器码" || bad "云端 license 含机器码 ($(cat cloudlic.txt 2>/dev/null))"
+    echo "$OUT" | grep -q "PERMANENT=1" && ok "云端永久授权生效" || bad "云端永久授权 (输出: $OUT)"
+    grep -qE '^DTBOOCLIC2\|1526045421\|[0-9]+\|0\|[^|]+\|[0-9a-f]{64}$' cloudlic.txt && ok "云端 license 永久(EXPIRY=0)+含机器码" || bad "云端 license 格式 ($(cat cloudlic.txt 2>/dev/null))"
+    OUT2=$(DTBO_OC_LICENSE=$W/cloudlic2.txt timeout 60 $S verify --qq 1935400047 2>/dev/null)
+    echo "$OUT2" | grep -q "machine_not_allowed" && ok "云端机器码白名单拦截生效 (非绑定设备拒绝)" || echo "SKIP  白名单拦截 (若云端名单未配机器码: $OUT2)"
 else
     echo "SKIP  云端 E2E (网络不可达: $OUT)"
 fi
