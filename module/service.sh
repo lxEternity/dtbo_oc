@@ -148,26 +148,36 @@ STRIP=$(echo "$IDINFO" | grep '^STRIP_ABOVE=' | cut -d= -f2)
 [ -z "$STRIP" ] && STRIP=0
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
+expand_hz() {
+    T=$1; L=""
+    for t in 130 132 138 141 144 148 150 158 165 170 178 185 188 190 195 198; do
+        [ "$t" -le "$T" ] || continue
+        L="${L:+$L,}$t"
+    done
+    echo "$L"
+}
+
+# 与 webuictl.sh 档位表完全一致: WebUI 可选档位开机校验必须全部放行, 否则会被误判回落
 CHOICES=""
 case "$DEVICE" in
-    ace2pro)   CHOICES="144 165 185"; DEF_HZ=144 ;;
-    op13t)     CHOICES="144";         DEF_HZ=144 ;;
-    op15t)     CHOICES="185 195";     DEF_HZ=185 ;;
-    ace5)      CHOICES="144";         DEF_HZ=144 ;;
-    ace3)      CHOICES="144";         DEF_HZ=144 ;;
-    ace3pro)   CHOICES="144";         DEF_HZ=144 ;;
-    op12)      CHOICES="144";         DEF_HZ=144 ;;
-    op13)      CHOICES="144";         DEF_HZ=144 ;;
-    op15|ace6) CHOICES="185 195";     DEF_HZ=185 ;;
-    gt8)       CHOICES="144 165 185 195"; DEF_HZ=185 ;;
-    gt7p)      CHOICES="130 142 144";     DEF_HZ=144 ;;
-    gt7s)      CHOICES="144 165 185";     DEF_HZ=185 ;;
-    gt8p)      CHOICES="165 185";         DEF_HZ=185 ;;
-    ace6t)     CHOICES="185";             DEF_HZ=185 ;;
-    ace6u)     CHOICES="185";             DEF_HZ=185 ;;
-    ace5p)     CHOICES="144";         DEF_HZ=144 ;;
-    gt7p2)     CHOICES="144";         DEF_HZ=144 ;;
-    op11)      CHOICES="";            DEF_HZ=0 ;;
+    ace2pro)   CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=144 ;;
+    op13t)     CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
+    op15t)     CHOICES="$(expand_hz 195 | tr ',' ' ') 198"; DEF_HZ=185 ;;
+    ace5)      CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
+    ace3)      CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
+    ace3pro)   CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
+    op12)      CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
+    op13)      CHOICES="130 141 144 150"; DEF_HZ=144 ;;
+    op15|ace6) CHOICES="$(expand_hz 195 | tr ',' ' ') 198"; DEF_HZ=185 ;;
+    gt8)       CHOICES="$(expand_hz 195 | tr ',' ' ') 198"; DEF_HZ=185 ;;
+    gt7p)      CHOICES="130 142 144"; DEF_HZ=144 ;;
+    gt7s)      CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=185 ;;
+    gt8p)      CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=185 ;;
+    ace6t)     CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=185 ;;
+    ace6u)     CHOICES="185"; DEF_HZ=185 ;;
+    ace5p)     CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
+    gt7p2)     CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
+    op11)      CHOICES=""; DEF_HZ=0 ;;
     *) log "[中止] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
 log "机型识别: $DEVNAME ($DEVICE)"
@@ -253,16 +263,6 @@ if [ "$NEED_OC" = "1" ]; then
             ;;
     esac
 fi
-
-expand_hz() {
-    T=$1; L=""
-    for t in 130 132 138 141 144 148 150 158 165 170 178 185 190 195 198; do
-        [ "$t" -le "$T" ] || continue
-        [ "$t" = "198" ] && [ "$T" -lt "195" ] && continue
-        L="${L:+$L,}$t"
-    done
-    echo "$L"
-}
 
 if [ "$OC_MODE" = "ko" ]; then
     if [ "$HZ_CHOICE" = "0" ]; then

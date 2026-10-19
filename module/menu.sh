@@ -32,14 +32,14 @@ CHOICES=""
 case "$DEVICE" in
     ace2pro)   CHOICES="144 165 185" ;;
     op13t)     CHOICES="144" ;;
-    op15t)     CHOICES="185 195" ;;
+    op15t)     CHOICES="185 188 190 195 198" ;;
     ace5)      CHOICES="144" ;;
     ace3)      CHOICES="144" ;;
     ace3pro)   CHOICES="144" ;;
     op12)      CHOICES="144" ;;
     op13)      CHOICES="144 150" ;;
-    op15|ace6) CHOICES="185 195" ;;
-    gt8)       CHOICES="144 165 185 195" ;;
+    op15|ace6) CHOICES="185 188 190 195 198" ;;
+    gt8)       CHOICES="144 165 185 188 190 195 198" ;;
     gt7p)      CHOICES="130 142 144" ;;
     gt7s)      CHOICES="144 165 185" ;;
     gt8p)      CHOICES="165 185" ;;

@@ -62,11 +62,16 @@ function drawLicense() {
   box.classList.toggle('ok', okLic);
   box.classList.toggle('bad', !okLic && !!lic);
   if (okLic) {
-    $('verify-text').textContent = `已验证 QQ ${lic.qq || ''}, 授权有效期至 ${lic.expiry || '未知'}`;
+    $('verify-text').textContent = lic.expiry === '永久'
+      ? `已验证 QQ ${lic.qq || ''}, 永久授权`
+      : `已验证 QQ ${lic.qq || ''}, 授权有效期至 ${lic.expiry || '未知'}`;
     $('verify-caption').textContent = '已验证';
   } else if (lic?.state === 'expired') {
     $('verify-text').textContent = `授权已过期 (QQ ${lic.qq || ''}), 请重新验证`;
     $('verify-caption').textContent = '已过期';
+  } else if (lic?.state === 'wrongmachine') {
+    $('verify-text').textContent = `授权绑定于其他设备 (QQ ${lic.qq || ''}), 请在本机重新验证`;
+    $('verify-caption').textContent = '设备不符';
   } else if (lic?.state === 'bad') {
     $('verify-text').textContent = '授权文件无效, 请重新验证';
     $('verify-caption').textContent = '无效';
@@ -74,6 +79,7 @@ function drawLicense() {
     $('verify-text').textContent = '未验证 — 使用超频/刷入功能需先验证已加入QQ群';
     $('verify-caption').textContent = '未验证';
   }
+  $('machine-id').textContent = state?.machine || '—';
 }
 
 function controls() {
@@ -365,6 +371,85 @@ $('verify-auto-btn').addEventListener('click', () => verify(true));
 $('qq-input').addEventListener('keydown', event => {
   if (event.key === 'Enter') verify();
 });
+
+const THEME_KEY = 'dtbo_theme';
+let theme = {};
+try { theme = JSON.parse(localStorage.getItem(THEME_KEY)) || {}; } catch { theme = {}; }
+function saveTheme() {
+  try { localStorage.setItem(THEME_KEY, JSON.stringify(theme)); } catch { }
+}
+function applyTheme() {
+  const root = document.documentElement.style;
+  const glass = !!theme.glass;
+  root.setProperty('--bg-show', theme.bgShow ?? 0.35);
+  root.setProperty('--card-alpha', theme.cardAlpha ?? 1);
+  root.setProperty('--ctl-alpha', theme.ctlAlpha ?? 1);
+  $('bg-layer').style.backgroundImage = theme.img ? `url(${theme.img})` : '';
+  document.body.classList.toggle('glass', glass);
+  document.body.classList.toggle('hoverfx', theme.hover !== false);
+  $('bg-show').value = theme.bgShow ?? 0.35;
+  $('card-alpha').value = theme.cardAlpha ?? 1;
+  $('ctl-alpha').value = theme.ctlAlpha ?? 1;
+  $('glass-toggle').checked = glass;
+  $('hover-toggle').checked = theme.hover !== false;
+}
+$('theme-btn').addEventListener('click', event => {
+  event.stopPropagation();
+  $('theme-panel').hidden = !$('theme-panel').hidden;
+});
+$('theme-panel').addEventListener('click', event => event.stopPropagation());
+document.addEventListener('click', () => { $('theme-panel').hidden = true; });
+$('bg-pick').addEventListener('click', () => $('bg-file').click());
+$('bg-clear').addEventListener('click', () => {
+  delete theme.img;
+  saveTheme();
+  applyTheme();
+});
+$('bg-file').addEventListener('change', () => {
+  const file = $('bg-file').files[0];
+  $('bg-file').value = '';
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, 1080 / Math.max(image.width, image.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(image.width * scale);
+      canvas.height = Math.round(image.height * scale);
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      theme.img = canvas.toDataURL('image/jpeg', 0.82);
+      saveTheme();
+      applyTheme();
+    };
+    image.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+});
+$('bg-show').addEventListener('input', () => { theme.bgShow = Number($('bg-show').value); saveTheme(); applyTheme(); });
+$('card-alpha').addEventListener('input', () => { theme.cardAlpha = Number($('card-alpha').value); saveTheme(); applyTheme(); });
+$('ctl-alpha').addEventListener('input', () => { theme.ctlAlpha = Number($('ctl-alpha').value); saveTheme(); applyTheme(); });
+$('glass-toggle').addEventListener('change', () => { theme.glass = $('glass-toggle').checked; saveTheme(); applyTheme(); });
+$('hover-toggle').addEventListener('change', () => { theme.hover = $('hover-toggle').checked; saveTheme(); applyTheme(); });
+applyTheme();
+
+$('copy-machine').addEventListener('click', async () => {
+  const id = state?.machine || $('machine-id').textContent;
+  if (!id || id === '—') return;
+  try {
+    await navigator.clipboard.writeText(id);
+    notify(`已复制主板ID: ${id}`);
+  } catch {
+    const input = document.createElement('textarea');
+    input.value = id;
+    document.body.append(input);
+    input.select();
+    document.execCommand('copy');
+    input.remove();
+    notify(`已复制主板ID: ${id}`);
+  }
+});
+
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) refresh(false);
 });

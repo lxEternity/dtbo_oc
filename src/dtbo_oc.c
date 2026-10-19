@@ -143,7 +143,7 @@ static void hmac_sha256(const uint8_t *key, size_t klen, const void *msg, size_t
 }
 
 #define LIC_DAYS   30
-#define LIC_PREFIX "DTBOOCLIC1"
+#define LIC_PREFIX "DTBOOCLIC2"   /* v2.38: 增加 machine 字段, 旧格式自动失效需重新验证 */
 
 static const char *license_path(void) {
     const char *e = getenv("DTBO_OC_LICENSE");
@@ -153,7 +153,35 @@ static const char *members_cache_path(void) {
     return "/data/adb/dtbo_oc/members.txt";
 }
 
-/* license 校验: 0=有效 1=不存在 2=格式/HMAC无效 3=已过期 */
+/* v2.38 主板ID: 授权绑定设备 (license 含 machine, 复制到其他设备无效)
+   device-tree 序列号 > sysfs 序列号 > "0"; 正式构建不接受环境变量注入 (防伪造机器码共享授权) */
+static void get_machine(char out[17]) {
+    size_t n = 0;
+#ifdef LIC_TEST_MEMBERS
+    const char *e = getenv("DTBO_OC_MACHINE");
+    if (e && *e)
+        for (; *e && n < 16; e++) if (isalnum((unsigned char)*e)) out[n++] = *e;
+#endif
+    if (n == 0) {
+        static const char *paths[] = {
+            "/proc/device-tree/serial-number",
+            "/sys/firmware/devicetree/base/serial-number",
+            "/sys/devices/soc0/serial_number",
+            NULL };
+        for (int pi = 0; paths[pi] && n == 0; pi++) {
+            FILE *f = fopen(paths[pi], "rb");
+            if (!f) continue;
+            char buf[64];
+            size_t r = fread(buf, 1, sizeof buf - 1, f);
+            fclose(f);
+            for (size_t i = 0; i < r && n < 16; i++) if (isalnum((unsigned char)buf[i])) out[n++] = buf[i];
+        }
+    }
+    out[n] = 0;
+    if (n == 0) strcpy(out, "0");
+}
+
+/* license 校验: 0=有效 1=不存在 2=格式/HMAC无效 3=已过期 4=绑定机器不符 */
 static int license_check(char qq_out[16], long *exp_out) {
     if (qq_out) qq_out[0] = 0;
     if (exp_out) *exp_out = 0;
@@ -168,23 +196,29 @@ static int license_check(char qq_out[16], long *exp_out) {
         char *f3 = strtok(NULL, "|");
         char *f4 = strtok(NULL, "|");
         char *f5 = strtok(NULL, "|");
-        if (f1 && f2 && f3 && f4 && f5 && !strcmp(f1, LIC_PREFIX) && strlen(f5) == 64) {
+        char *f6 = strtok(NULL, "|");
+        if (f1 && f2 && f3 && f4 && f5 && f6 && !strcmp(f1, LIC_PREFIX) && strlen(f6) == 64) {
             size_t ql = strlen(f2);
             int ok = (ql >= 5 && ql <= 11 && f2[0] != '0');
             for (size_t i = 0; ok && i < ql; i++) if (!isdigit((unsigned char)f2[i])) ok = 0;
             for (const char *p = f3; ok && *p; p++) if (!isdigit((unsigned char)*p)) ok = 0;
             for (const char *p = f4; ok && *p; p++) if (!isdigit((unsigned char)*p)) ok = 0;
+            size_t ml = f5 ? strlen(f5) : 0;
+            if (ok && (ml < 1 || ml > 16)) ok = 0;
+            for (size_t i = 0; ok && i < ml; i++) if (!isalnum((unsigned char)f5[i])) ok = 0;
             if (ok) {
-                char payload[128];
-                snprintf(payload, sizeof payload, "%s|%s|%s|%s", LIC_PREFIX, f2, f3, f4);
+                char payload[160];
+                snprintf(payload, sizeof payload, "%s|%s|%s|%s|%s", LIC_PREFIX, f2, f3, f4, f5);
                 uint8_t key[33]; lic_xor_dec(LIC_KEY_C, sizeof LIC_KEY_C, (char *)key);
                 uint8_t mac[32]; hmac_sha256(key, 32, payload, strlen(payload), mac);
                 char hex[65]; for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", mac[i]);
-                if (!strcmp(hex, f5)) {
+                if (!strcmp(hex, f6)) {
                     long exp = strtol(f4, NULL, 10);
                     if (exp_out) *exp_out = exp;
                     if (qq_out) snprintf(qq_out, 16, "%s", f2);
-                    rc = (exp < (long)time(NULL)) ? 3 : 0;
+                    char cur[17]; get_machine(cur);
+                    if (strcmp(cur, f5)) rc = 4;                      /* 机器码不符: 授权来自其他设备 */
+                    else rc = (exp == 0) ? 0 : ((exp < (long)time(NULL)) ? 3 : 0);   /* exp=0 = 永久授权 */
                 }
             }
         }
@@ -193,10 +227,10 @@ static int license_check(char qq_out[16], long *exp_out) {
     return rc;
 }
 
-static int license_write(const char *qq, const char *path) {
-    long now = (long)time(NULL), exp = now + LIC_DAYS * 86400L;
-    char payload[128];
-    snprintf(payload, sizeof payload, "%s|%s|%ld|%ld", LIC_PREFIX, qq, now, exp);
+static int license_write(const char *qq, const char *path, int perm, const char *machine) {
+    long now = (long)time(NULL), exp = perm ? 0 : now + LIC_DAYS * 86400L;
+    char payload[160];
+    snprintf(payload, sizeof payload, "%s|%s|%ld|%ld|%s", LIC_PREFIX, qq, now, exp, machine);
     uint8_t key[33]; lic_xor_dec(LIC_KEY_C, sizeof LIC_KEY_C, (char *)key);
     uint8_t mac[32]; hmac_sha256(key, 32, payload, strlen(payload), mac);
     char hex[65]; for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", mac[i]);
@@ -208,8 +242,12 @@ static int license_write(const char *qq, const char *path) {
     return 0;
 }
 
-/* 名单检查: 1=在群 0=不在 -1=名单无效(缺GROUP头/不可读) */
-static int members_lookup(const char *path, const char *qq) {
+/* 名单行命中信息: perm=永久(QQ*); wl=机器码白名单(QQ:码1,码2), nwl=0 表示未限制 */
+typedef struct { int perm; char wl[8][17]; int nwl; } MemHit;
+
+/* 名单检查: 1=在群 0=不在 -1=名单无效(缺GROUP头/不可读); hit 可为 NULL */
+static int members_lookup(const char *path, const char *qq, MemHit *hit) {
+    if (hit) { hit->perm = 0; hit->nwl = 0; }
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     char grp[16]; lic_group(grp);
@@ -225,13 +263,65 @@ static int members_lookup(const char *path, const char *qq) {
             if (!strcmp(p + 6, grp)) group_ok = 1;
             continue;
         }
-        char tok[32];
-        if (sscanf(p, "%31s", tok) != 1) continue;
+        char tok[160];
+        if (sscanf(p, "%159s", tok) != 1) continue;
+        /* 格式: QQ | QQ*(永久) | QQ:码1,码2 | QQ*:码1,码2 (机器码白名单, 群主在控制端维护) */
+        char *colon = strchr(tok, ':');
+        char codes[128] = "";
+        if (colon) { snprintf(codes, sizeof codes, "%s", colon + 1); *colon = 0; }
+        int perm = 0;
+        size_t tl = strlen(tok);
+        if (tl > 1 && tok[tl-1] == '*') { perm = 1; tok[tl-1] = 0; }
         for (char *c = tok; *c; c++) if (!isdigit((unsigned char)*c)) { *c = 0; break; }
-        if (tok[0] && !strcmp(tok, qq)) found = 1;
+        if (tok[0] && !strcmp(tok, qq)) {
+            found = 1;
+            if (hit) {
+                hit->perm = perm;
+                for (char *c = strtok(codes, ","); c && hit->nwl < 8; c = strtok(NULL, ",")) {
+                    size_t cl = strlen(c);
+                    if (cl < 1 || cl > 16) continue;
+                    int okc = 1;
+                    for (size_t k = 0; k < cl; k++) if (!isalnum((unsigned char)c[k])) okc = 0;
+                    if (okc) snprintf(hit->wl[hit->nwl++], 17, "%s", c);
+                }
+            }
+        }
     }
     fclose(f);
     return group_ok ? found : -1;
+}
+
+/* 统一发证: 白名单校验 + 写 license (绑定本机机器码) */
+static int verify_issue(const char *qq, const MemHit *hit, const char *machine) {
+    char grp[16]; lic_group(grp);
+    if (hit->nwl > 0) {
+        int okm = 0;
+        for (int i = 0; i < hit->nwl; i++) if (!strcmp(hit->wl[i], machine)) okm = 1;
+        if (!okm) {
+            printf("VERIFIED=0 REASON=machine_not_allowed MACHINE=%s\n", machine);
+            fprintf(stderr, "[绑定] QQ %s 已限定绑定 %d 台设备, 本机机器码 %s 未在授权列表\n", qq, hit->nwl, machine);
+            fprintf(stderr, "[绑定] 请群主在名单该QQ行追加本机机器码 (格式: %s:码1,码2,%s)\n", qq, machine);
+            return 1;
+        }
+    }
+    if (license_write(qq, license_path(), hit->perm, machine) != 0) {
+        printf("VERIFIED=0 REASON=write_failed\n");
+        fprintf(stderr, "[验证] 授权写入失败: %s\n", license_path());
+        return 1;
+    }
+    char lqq[16]; long lexp = 0;
+    license_check(lqq, &lexp);
+    char when[24] = "";
+    if (lexp == 0) snprintf(when, sizeof when, "永久");
+    else {
+        struct tm *tm = localtime(&(time_t){ (time_t)lexp });
+        if (tm) strftime(when, sizeof when, "%Y-%m-%d", tm);
+    }
+    printf("VERIFIED=1 QQ=%s EXPIRY=%ld EXPIRY_DATE=%s PERMANENT=%d MACHINE=%s\n",
+           qq, lexp, when, hit->perm ? 1 : 0, machine);
+    fprintf(stderr, "[验证] 验证成功 (机器码 %s), %s%s\n", machine,
+            hit->perm ? "永久授权" : "授权30天", hit->perm ? "" : " (到期自动续期)");
+    return 0;
 }
 
 static int download_members(const char *dst) {
@@ -260,14 +350,24 @@ static int cmd_license(void) {
     int rc = license_check(qq, &exp);
     char when[24] = "";
     if (rc == 0 || rc == 3) {
-        time_t t = (time_t)exp;
-        struct tm *tm = localtime(&t);
-        if (tm) strftime(when, sizeof when, "%Y-%m-%d", tm);
+        if (exp == 0) snprintf(when, sizeof when, "永久");
+        else {
+            time_t t = (time_t)exp;
+            struct tm *tm = localtime(&t);
+            if (tm) strftime(when, sizeof when, "%Y-%m-%d", tm);
+        }
     }
     switch (rc) {
-    case 0:  printf("LICENSE=ok QQ=%s EXPIRY=%ld EXPIRY_DATE=%s\n", qq, exp, when); return 0;
+    case 0:
+        if (exp == 0) printf("LICENSE=ok QQ=%s EXPIRY=0 EXPIRY_DATE=永久 PERMANENT=1\n", qq);
+        else printf("LICENSE=ok QQ=%s EXPIRY=%ld EXPIRY_DATE=%s\n", qq, exp, when);
+        return 0;
     case 1:  printf("LICENSE=none\n"); return 1;
     case 3:  printf("LICENSE=expired QQ=%s EXPIRY=%ld EXPIRY_DATE=%s\n", qq, exp, when); return 1;
+    case 4:
+        printf("LICENSE=wrongmachine QQ=%s\n", qq);
+        fprintf(stderr, "[验证] 授权绑定于其他设备 (机器码不符), 请在本机重新验证\n");
+        return 1;
     default: printf("LICENSE=bad\n"); return 1;
     }
 }
@@ -282,30 +382,34 @@ static int cmd_verify(const char *qq, const char *members_override) {
         return 1;
     }
     char grp[16]; lic_group(grp);
+    char machine[17]; get_machine(machine);
     char mpath[512];
+    MemHit hit; memset(&hit, 0, sizeof hit);
     int look = -1;
 #ifdef LIC_TEST_MEMBERS
     /* 仅测试构建: 允许指定本地名单文件 */
     if (members_override) snprintf(mpath, sizeof mpath, "%s", members_override);
     else snprintf(mpath, sizeof mpath, "%s", members_cache_path());
-    look = members_lookup(mpath, qq);
+    look = members_lookup(mpath, qq, &hit);
 #else
     (void)members_override;
     snprintf(mpath, sizeof mpath, "%s", members_cache_path());
-    int look_cache = members_lookup(mpath, qq);
+    int look_cache = members_lookup(mpath, qq, &hit);
     char tmp[540];
     snprintf(tmp, sizeof tmp, "%s.tmp", mpath);
     if (download_members(tmp) == 0) {
-        int lt = members_lookup(tmp, qq);
+        MemHit th; memset(&th, 0, sizeof th);
+        int lt = members_lookup(tmp, qq, &th);
         if (lt >= 0) {      /* 名单有效 (含 GROUP 头): 无论在不在群都以云端为准 */
             rename(tmp, mpath);
             look = lt;
+            if (lt == 1) hit = th;
         } else {
             unlink(tmp);
         }
     }
     if (look < 0) {
-        if (look_cache >= 0) look = look_cache;   /* 离线回退: 上次成功拉取的缓存 */
+        if (look_cache >= 0) { look = look_cache; }   /* 离线回退: 上次成功拉取的缓存 */
         else {
             FILE *t = fopen(mpath, "r");
             int have = (t != NULL);
@@ -323,19 +427,7 @@ static int cmd_verify(const char *qq, const char *members_override) {
         fprintf(stderr, "[验证] 请先加入QQ群, 加群后需等待群主同步名单\n");
         return 1;
     }
-    if (license_write(qq, license_path()) != 0) {
-        printf("VERIFIED=0 REASON=write_failed\n");
-        fprintf(stderr, "[验证] 授权写入失败: %s\n", license_path());
-        return 1;
-    }
-    char lqq[16]; long lexp = 0;
-    license_check(lqq, &lexp);
-    char when[24] = "";
-    struct tm *tm = localtime(&(time_t){ (time_t)lexp });
-    if (tm) strftime(when, sizeof when, "%Y-%m-%d", tm);
-    printf("VERIFIED=1 QQ=%s EXPIRY=%ld EXPIRY_DATE=%s\n", qq, lexp, when);
-    fprintf(stderr, "[验证] 验证成功, 授权30天 (至 %s)\n", when);
-    return 0;
+    return verify_issue(qq, &hit, machine);
 }
 
 /* ---------------- v2.37 自动验证: 扫描本机 QQ/TIM 账号 ---------------- */
@@ -431,7 +523,7 @@ static int qq_scan_auto(char out[][16], int cap) {
     return n;
 }
 
-/* 自动验证: 检测本机QQ -> 联网核对群名单 -> 在群则写入30天授权 */
+/* 自动验证: 检测本机QQ -> 联网核对群名单 -> 在群则写入授权 (绑定本机机器码) */
 static int cmd_verify_auto(const char *members_override) {
     char cands[QQ_MAX][16];
     int n = qq_scan_auto(cands, QQ_MAX);
@@ -442,6 +534,7 @@ static int cmd_verify_auto(const char *members_override) {
         return 1;
     }
     char grp[16]; lic_group(grp);
+    char machine[17]; get_machine(machine);
     char mpath[512];
 #ifdef LIC_TEST_MEMBERS
     if (members_override) snprintf(mpath, sizeof mpath, "%s", members_override);
@@ -449,10 +542,10 @@ static int cmd_verify_auto(const char *members_override) {
 #else
     (void)members_override;
     snprintf(mpath, sizeof mpath, "%s", members_cache_path());
-    int have_cache = members_lookup(mpath, "0");
+    int have_cache = members_lookup(mpath, "0", NULL);
     char tmp[540];
     snprintf(tmp, sizeof tmp, "%s.tmp", mpath);
-    if (download_members(tmp) == 0 && members_lookup(tmp, "0") >= 0) rename(tmp, mpath);
+    if (download_members(tmp) == 0 && members_lookup(tmp, "0", NULL) >= 0) rename(tmp, mpath);
     else {
         unlink(tmp);
         if (have_cache < 0) {
@@ -465,32 +558,23 @@ static int cmd_verify_auto(const char *members_override) {
         }
     }
 #endif
-    char hit[16] = "";
+    char hitqq[16] = "";
+    MemHit hit; memset(&hit, 0, sizeof hit);
     int look = 0;
     for (int i = 0; i < n; i++) {
-        look = members_lookup(mpath, cands[i]);
-        if (look != 0) { if (look == 1) snprintf(hit, sizeof hit, "%s", cands[i]); break; }
+        look = members_lookup(mpath, cands[i], &hit);
+        if (look != 0) { if (look == 1) snprintf(hitqq, sizeof hitqq, "%s", cands[i]); break; }
     }
     if (look < 0) { printf("VERIFIED=0 REASON=list_invalid\n"); fprintf(stderr, "[验证] 名单无效 (缺GROUP头)\n"); return 1; }
-    if (look == 0) {
+    if (!hitqq[0]) {
         printf("VERIFIED=0 REASON=not_in_group\n");
         fprintf(stderr, "[验证] 本机QQ账号均不在群 %s 成员名单中\n", grp);
         fprintf(stderr, "[验证] 请先加入QQ群, 加群后需等待群主同步名单\n");
         return 1;
     }
-    if (license_write(hit, license_path()) != 0) {
-        printf("VERIFIED=0 REASON=write_failed\n");
-        fprintf(stderr, "[验证] 授权写入失败: %s\n", license_path());
-        return 1;
-    }
-    char lqq[16]; long lexp = 0;
-    license_check(lqq, &lexp);
-    char when[24] = "";
-    struct tm *tm = localtime(&(time_t){ (time_t)lexp });
-    if (tm) strftime(when, sizeof when, "%Y-%m-%d", tm);
-    printf("VERIFIED=1 QQ=%s EXPIRY=%ld EXPIRY_DATE=%s AUTO=1\n", hit, lexp, when);
-    fprintf(stderr, "[验证] 自动验证成功 (本机QQ %s), 授权30天 (至 %s)\n", hit, when);
-    return 0;
+    int rc = verify_issue(hitqq, &hit, machine);
+    if (rc == 0) printf("AUTO=1\n");
+    return rc;
 }
 
 /* v2.37: 跳转QQ群卡片 (群号XOR内嵌, 不落明文; 打印链接并尝试 am start 拉起QQ) */
@@ -3114,6 +3198,11 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "keys")) return cmd_keys();
     if (!strcmp(cmd, "license")) return cmd_license();
     if (!strcmp(cmd, "joingroup")) return cmd_joingroup();
+    if (!strcmp(cmd, "machineid")) {   /* 主板ID (授权绑定用) */
+        char mid[17]; get_machine(mid);
+        printf("MACHINE=%s\n", mid);
+        return 0;
+    }
     if (!strcmp(cmd, "verify")) {
 #ifndef LIC_TEST_MEMBERS
         if (members) die("本构建不支持 --members (仅测试构建)");
@@ -3142,7 +3231,7 @@ int main(int argc, char **argv) {
             if (lc != 0) {
                 char grp[16]; lic_group(grp);
                 fprintf(stderr, "[验证] 未通过QQ群验证, 拒绝生成补丁 (%s)\n",
-                        lc == 1 ? "未验证" : lc == 3 ? "授权已过期" : "授权文件无效");
+                        lc == 1 ? "未验证" : lc == 3 ? "授权已过期" : lc == 4 ? "授权绑定其他设备" : "授权文件无效");
                 fprintf(stderr, "[验证] 请加入QQ群 %s, 在模块 WebUI [群验证] 或终端菜单完成验证\n", grp);
                 fprintf(stderr, "[验证] 授权有效期30天, 到期后需重新验证\n");
                 return 4;

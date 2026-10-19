@@ -73,9 +73,8 @@ fi
 [ -z "$OC_OK" ] && OC_OK=1
 expand_hz() {
     T=$1; L=""
-    for t in 130 132 138 141 144 148 150 158 165 170 178 185 190 195 198; do
+    for t in 130 132 138 141 144 148 150 158 165 170 178 185 188 190 195 198; do
         [ "$t" -le "$T" ] || continue
-        [ "$t" = "198" ] && [ "$T" -lt "195" ] && continue
         L="${L:+$L }$t"
     done
     echo "$L"
@@ -83,14 +82,14 @@ expand_hz() {
 case "$DEVICE" in
     ace2pro)   CHOICES=$(expand_hz 185) ;;
     op13t)     CHOICES=$(expand_hz 144) ;;
-    op15t)     CHOICES=$(expand_hz 195) ;;
+    op15t)     CHOICES="$(expand_hz 195) 198" ;;
     ace5)      CHOICES=$(expand_hz 144) ;;
     ace3)      CHOICES=$(expand_hz 144) ;;
     ace3pro)   CHOICES=$(expand_hz 144) ;;
     op12)      CHOICES=$(expand_hz 144) ;;
     op13)      CHOICES="130 141 144 150" ;;
-    op15|ace6) CHOICES=$(expand_hz 195) ;;
-    gt8)       CHOICES=$(expand_hz 195) ;;
+    op15|ace6) CHOICES="$(expand_hz 195) 198" ;;
+    gt8)       CHOICES="$(expand_hz 195) 198" ;;
     gt7p)      CHOICES="130 142 144" ;;
     gt7s)      CHOICES=$(expand_hz 185) ;;
     gt8p)      CHOICES=$(expand_hz 185) ;;
@@ -176,11 +175,14 @@ lic_query() {
             LIC_QQ=$(printf '%s\n' "$L" | sed -n 's/^LICENSE=expired QQ=\([0-9]*\) .*/\1/p')
             LIC_EXP=$(printf '%s\n' "$L" | sed -n 's/.*EXPIRY_DATE=//p')
             ;;
+        LICENSE=wrongmachine*) LIC_STATE="wrongmachine" ;;
         LICENSE=bad*) LIC_STATE="bad" ;;
     esac
     return 0
 }
 lic_query
+MACHINE=""
+[ -x "$TOOL" ] && MACHINE=$("$TOOL" machineid 2>/dev/null | sed -n 's/^MACHINE=//p')
 
 sf_boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
 
@@ -292,7 +294,8 @@ emit_status() {
     printf '"oc_active":%s,' "$OC_ACTIVE"
     printf '"ko":{"available":%s,"builtin":%s,"loaded":%s,"installed":%s,"vermatch":%s,"file":' "$KO_AVAIL" "$KO_BUILTIN" "$KO_LOADED" "$KO_INSTALLED" "${KO_VERMATCH:-null}"
     printf '%s' "${KO_FILE:-}" | json_string
-    printf '},"dtbo_patched":%s,"stock_ok":%s,"version":"v2.37"' "$DTBO_PATCHED" "$([ -f "$STOCK" ] && echo 1 || echo 0)"
+    printf '},"dtbo_patched":%s,"stock_ok":%s,"version":"v2.38","machine":' "$DTBO_PATCHED" "$([ -f "$STOCK" ] && echo 1 || echo 0)"
+    printf '%s' "$MACHINE" | json_string
     printf ',"license":{"state":"%s","qq":' "$LIC_STATE"
     printf '%s' "$LIC_QQ" | json_string
     printf ',"expiry":'
@@ -542,7 +545,11 @@ EOF
         VRC=$?
         if [ "$VRC" = "0" ]; then
             VEXP=$(printf '%s\n' "$VOUT" | sed -n 's/.*EXPIRY_DATE=//p')
-            if [ "$AUTO" = "1" ]; then VMSG="自动验证通过 (本机QQ在群内), 授权30天 (有效期至 ${VEXP:-未知})"; else VMSG="QQ群验证通过, 授权30天 (有效期至 ${VEXP:-未知})"; fi
+            case "$VOUT" in *PERMANENT=1*)
+                if [ "$AUTO" = "1" ]; then VMSG="自动验证通过 (本机QQ在群内), 永久授权"; else VMSG="QQ群验证通过, 永久授权"; fi ;;
+            *)
+                if [ "$AUTO" = "1" ]; then VMSG="自动验证通过 (本机QQ在群内), 授权30天 (有效期至 ${VEXP:-未知})"; else VMSG="QQ群验证通过, 授权30天 (有效期至 ${VEXP:-未知})"; fi ;;
+            esac
             lic_query
             printf '{"ok":true,"message":'
             printf '%s' "$VMSG" | json_string
@@ -558,6 +565,9 @@ EOF
             bad_qq)          fail "QQ号格式无效 (5-11位数字, 不以0开头)" ;;
             not_in_group)    if [ "$AUTO" = "1" ]; then fail "本机QQ均不在群成员名单中; 请先加入QQ群, 加群后需等待群主同步名单"; else fail "该QQ号不在群成员名单中; 请先加入QQ群, 加群后需等待群主同步名单"; fi ;;
             no_local_qq)     fail "未在本机检测到QQ/TIM账号, 请手动输入QQ号验证" ;;
+            machine_not_allowed)
+                VMID=$(printf '%s\n' "$VOUT" | sed -n 's/.*MACHINE=//p')
+                fail "该QQ绑定的设备数量已达上限, 本机未在授权列表; 主板ID: ${VMID:-未知}, 请群主在名单该QQ行追加此机器码" ;;
             list_invalid)    fail "云端群成员名单无效 (缺少群号标识), 请联系群主" ;;
             download_failed) fail "无法联网获取群成员名单, 请检查网络后重试" ;;
             write_failed)    fail "授权写入失败, 请重试" ;;

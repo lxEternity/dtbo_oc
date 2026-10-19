@@ -27,7 +27,7 @@ if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
 fi
 
 ui_print "*******************************"
-ui_print " 超频解容模块 (多机型) v2.37"
+ui_print " 超频解容模块 (多机型) v2.38"
 ui_print "*******************************"
 ui_print "- 安全架构: 安装零分区写入, 不碰校验分区"
 ui_print "- 安装二进制: dtbo_oc + dtc (静态 arm64)"
@@ -134,14 +134,14 @@ CHOICES=""
 case "$DEVICE" in
     ace2pro)   DEF_HZ=144; CHOICES="144/165/185" ;;
     op13t)     DEF_HZ=144; CHOICES="144" ;;
-    op15t)     DEF_HZ=185; CHOICES="185/195" ;;
+    op15t)     DEF_HZ=185; CHOICES="185/188/190/195/198" ;;
     ace5)      DEF_HZ=144; CHOICES="144" ;;
     ace3)      DEF_HZ=144; CHOICES="144" ;;
     ace3pro)   DEF_HZ=144; CHOICES="144" ;;
     op12)      DEF_HZ=144; CHOICES="144" ;;
     op13)      DEF_HZ=144; CHOICES="144" ;;
-    op15|ace6) DEF_HZ=185; CHOICES="185/195" ;;
-    gt8)       DEF_HZ=185; CHOICES="144/165/185/195" ;;
+    op15|ace6) DEF_HZ=185; CHOICES="185/188/190/195/198" ;;
+    gt8)       DEF_HZ=185; CHOICES="144/165/185/188/190/195/198" ;;
     gt7p)      DEF_HZ=144; CHOICES="130/142/144" ;;
     gt7s)      DEF_HZ=185; CHOICES="144/165/185" ;;
     gt8p)      DEF_HZ=185; CHOICES="165/185" ;;
@@ -460,7 +460,7 @@ else
 fi
 
 ui_print " "
-ui_print "- v2.37 QQ群验证: 安装时自动检测本机QQ并联网核对群名单"
+ui_print "- v2.38 QQ群验证+主板ID绑定, WebUI 主题定制"
 ui_print "  (未入群将打开QQ群卡片并阻止刷入; 已验证授权30天)"
 ui_print "- 安全架构: 安装过程不写入任何分区"
 ui_print "  重启后 service.sh 自动: 备份原厂 -> 生成补丁 -> 刷入 dtbo"
