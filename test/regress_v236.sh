@@ -106,11 +106,24 @@ run "$U/798682e4-4ade-4645-b3c4-dc5f2c3527b7_一加12可超144.dtbo_a.img" op12 
 run "$U/83ae6eb4-3f9e-4248-bdb0-89f90cf06007_真我gt8.dtbo.img" gt8 "$G195" "" 144
 run "$U/a547f0f9-dea0-443b-abec-38a2f214734e_真我gt8pro可超频185.dtbo.img" gt8p "$G185" "" 144
 run "$U/c64d3c24-bd71-4dd9-a920-6edc6752b070_真我GT7 Pro可超185dtbo.img" gt7s "$G185" "" 120
-run "$U/fe1fffd6-3d36-425f-a8bd-a503ee7fadba_真我gt7Pro竞速版.可超频144.dtbo.img" gt7p2 "$G144" "" 120
+run "$U/fe1fffd6-3d36-425f-a8bd-a503ee7fadba_真我gt7Pro竞速版.可超频144.dtbo.img" gt7p2 "$G144" "--gt7p2" 120
 run "$U/2255da35-e279-450d-8292-af0112c8dbd4_真我GT7Pro竞速版已修改dtbo.img" gt7p "130,142,144" "--gt7p" 120
 echo "=== 电池方案抽查 ==="
 run "$U/594779c9-86e8-437d-b33f-e7527b1de9cf_一加_15_17.0.0.105_dtbo.img" op15batt "$G195" "--battery 3" 165
 run "$U/14af6b2f-6bbf-4b23-a6b4-e203aa853d4b_一加Ace2pro.dtbo.img" ace2pbatt "$G185" "--battery 4" 120
+run "$U/a547f0f9-dea0-443b-abec-38a2f214734e_真我gt8pro可超频185.dtbo.img" gt8pbatt "$G185" "--battery 5" 144
+
+echo "=== 解容显示真实电量 (hidden_soc_percent 归零) ==="
+rm -rf $W/w_hs; mkdir -p $W/w_hs
+$B patch --img "$U/a547f0f9-dea0-443b-abec-38a2f214734e_真我gt8pro可超频185.dtbo.img" --out $W/hs.img --dtc $DTC --workdir $W/w_hs --strip-above 144 --battery 5 --hz 185 >$W/hs.log 2>&1
+grep -q "真实电量x" $W/hs.log && ok "patch 报告真实电量替换计数" || bad "patch 应报告真实电量计数"
+rm -rf $W/w_hs2; mkdir -p $W/w_hs2
+$B checkoc --img $W/hs.img --stock-img "$U/a547f0f9-dea0-443b-abec-38a2f214734e_真我gt8pro可超频185.dtbo.img" --dtc $DTC --workdir $W/w_hs2 >/dev/null 2>&1
+HS_N=$(grep -h "hidden_soc_percent" $W/w_hs2/c*_img.dts 2>/dev/null | grep -vc "= <0x0*>;" )
+HS_T=$(grep -h "hidden_soc_percent" $W/w_hs2/c*_img.dts 2>/dev/null | wc -l)
+[ "$HS_T" -gt 0 ] && [ "$HS_N" = "0" ] && ok "输出镜像 hidden_soc_percent 全部归零 ($HS_T 处)" || bad "hidden_soc 未归零 (total=$HS_T nonzero=$HS_N)"
+HS_S=$(grep -h "hidden_soc_percent" $W/w_hs2/c*_stk.dts 2>/dev/null | grep -c "<0x14>;" )
+[ "$HS_S" -gt 0 ] && ok "原厂基准确认含 20% 隐藏区段 ($HS_S 处)" || bad "原厂应含 0x14 隐藏区段"
 echo "=== 6. 门禁旁路检查 ==="
 strings /tmp/dtbo_oc_arm64_ship 2>/dev/null | grep -qE '1124737265|jsdelivr|raw\.githubusercontent' && bad "二进制泄露明文" || ok "群号/URL 无明文泄露"
 $BS verify --qq 10001 --members /tmp/x 2>&1 | grep -q '不支持 --members' && ok "正式构建禁用--members" || bad "正式构建应禁用--members"

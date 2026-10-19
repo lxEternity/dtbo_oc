@@ -46,7 +46,7 @@ case "$DEVICE" in
     ace6t)     CHOICES="185" ;;
     ace6u)     CHOICES="185" ;;
     ace5p)     CHOICES="144" ;;
-    gt7p2)     CHOICES="144" ;;
+    gt7p2)     CHOICES="144 150" ;;
     op11)      CHOICES="" ;;
     *) echo "[错误] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
@@ -162,12 +162,11 @@ choose() {
 }
 
 echo "=============================================="
-echo " 超频解容模块 v2.37 — 配置菜单"
+echo " 超频解容模块 v2.38 — 配置菜单"
 echo " 机型: $DEVNAME ($DEVICE)"
 echo "$TIPS"
 echo "=============================================="
 
-# ---- v2.36/2.37 QQ 群验证: 未验证则禁止使用超频功能 ----
 LICOUT=$("$TOOL" license 2>/dev/null)
 case "$LICOUT" in
     LICENSE=ok*)
@@ -176,7 +175,6 @@ case "$LICOUT" in
         echo " QQ群验证: 已通过 (QQ $LIC_QQ, 有效期至 $LIC_EXP)"
         ;;
     *)
-        # v2.37: 先自动验证 (检测本机QQ并联网核对群名单)
         echo " QQ群验证: 未通过, 尝试自动验证本机QQ..."
         if "$TOOL" verify --auto >/dev/null 2>&1; then
             LICOUT=$("$TOOL" license 2>/dev/null)
@@ -248,10 +246,10 @@ if [ "$OC_MODE" = "ko" ]; then
 elif [ "$DEVICE" = "gt7p" ]; then
     GT_INIT=0
     [ "$BATTERY" = "6" ] && GT_INIT=1
-    choose "电池/充电方案:" "保持原版电池|GT7P 竞速版解容 (满充4.55V/关机2.85V/解除充电限流)" "$GT_INIT"
+    choose "电池/充电方案:" "保持原版电池|GT7P 竞速版解容 (满充4.55V/关机2.85V/解除限流/显示真实电量)" "$GT_INIT"
     BATTERY=$([ "$SEL" = "1" ] && echo 6 || echo 0)
 else
-    BAT_MENU="保持原版电池|解除充电限流|解除充电限流 + 电池解容 (关机2.8V/1%2.85V/充电欠压2.7V)|原版电池 + 电池解容 (关机2.8V/1%2.85V/充电欠压2.7V)"
+    BAT_MENU="保持原版电池|解除充电限流|解除充电限流 + 电池解容 (关机2.8V/1%2.85V/显示真实电量)|原版电池 + 电池解容 (关机2.8V/1%2.85V/显示真实电量)"
     BAT_MODES="0 1 2 5"
     if [ "$BATT_OK" = "1" ]; then
         BAT_MENU="$BAT_MENU|6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)|6100mAh 魔改电池 + 解除充电限流"
@@ -302,11 +300,11 @@ fi
 case "$BATTERY" in
     0) echo "  电池: 原版" ;;
     1) echo "  电池: 解除充电限流" ;;
-    2) echo "  电池: 解除充电限流 + 电池解容 (关机 2.8V / 1% 2.85V / 充电欠压 2.7V)" ;;
+    2) echo "  电池: 解除充电限流 + 电池解容 (关机 2.8V / 1% 2.85V / 显示真实电量)" ;;
     3) echo "  电池: 6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)" ;;
     4) echo "  电池: 6100mAh 魔改电池 + 解除充电限流 (关机 3.0V / 1% 3.05V / 满充 4.54V)" ;;
-    5) echo "  电池: 原版电池 + 电池解容 (关机 2.8V / 1% 2.85V / 充电欠压 2.7V)" ;;
-    6) echo "  电池: GT7P 竞速版解容 (满充 4.55V / 关机 2.85V / 解除充电限流)" ;;
+    5) echo "  电池: 原版电池 + 电池解容 (关机 2.8V / 1% 2.85V / 显示真实电量)" ;;
+    6) echo "  电池: GT7P 竞速版解容 (满充 4.55V / 关机 2.85V / 显示真实电量)" ;;
 esac
 echo "=============================================="
 choose "应用方式:" "稍后 (下次开机自动处理)|立即刷入 (重启后生效)" 0

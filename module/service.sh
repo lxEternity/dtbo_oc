@@ -157,7 +157,6 @@ expand_hz() {
     echo "$L"
 }
 
-# 与 webuictl.sh 档位表完全一致: WebUI 可选档位开机校验必须全部放行, 否则会被误判回落
 CHOICES=""
 case "$DEVICE" in
     ace2pro)   CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=144 ;;
@@ -176,7 +175,7 @@ case "$DEVICE" in
     ace6t)     CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=185 ;;
     ace6u)     CHOICES="185"; DEF_HZ=185 ;;
     ace5p)     CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
-    gt7p2)     CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
+    gt7p2)     CHOICES=$(expand_hz 150 | tr ',' ' '); DEF_HZ=144 ;;
     op11)      CHOICES=""; DEF_HZ=0 ;;
     *) log "[中止] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
@@ -230,7 +229,6 @@ elif [ "$BATTERY" = "6" ]; then
 fi
 log "方案: 档位 ${HZ_CHOICE:-0}, 电池模式 $BATTERY, 超频方案 $OC_MODE, LTPO禁用 ${LTPO_OFF:-0}"
 
-# ---- v2.36/2.37 QQ 群验证门禁: 未验证不修改 DTBO / 不挂载 KO ----
 NEED_OC=0
 [ "${HZ_CHOICE:-0}" != "0" ] && NEED_OC=1
 [ "${BATTERY:-0}" != "0" ] && NEED_OC=1
@@ -239,7 +237,6 @@ if [ "$NEED_OC" = "1" ]; then
     case "$LICOUT" in
         LICENSE=ok*) : ;;
         *)
-            # v2.37: 尝试自动重新验证 (检测本机QQ + 联网核对名单, 成功即自动续期30天)
             "$TOOL" verify --auto >>"$LOG" 2>&1
             LICOUT=$("$TOOL" license 2>/dev/null)
             case "$LICOUT" in
@@ -325,6 +322,7 @@ rm -rf "$WORK"/e*_* 2>/dev/null
 PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --battery $BATTERY --workdir $WORK"
 [ -n "$HZ" ] && PATCH_ARGS="$PATCH_ARGS --hz $HZ"
 [ "$DEVICE" = "gt7p" ] && PATCH_ARGS="$PATCH_ARGS --gt7p"
+[ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2"
 [ "$DEVICE" = "op13t" ] && PATCH_ARGS="$PATCH_ARGS --multifam"
 [ "$STRIP" != "0" ] && PATCH_ARGS="$PATCH_ARGS --strip-above $STRIP"
 [ "$DEVICE" = "op12" ] && PATCH_ARGS="$PATCH_ARGS --multifam"
@@ -369,7 +367,6 @@ if [ "${FLASH:-1}" != "1" ]; then
     exit 0
 fi
 
-# ---- v2.34 救援保护: 防止"fastboot 救回后又被自动刷入"的循环变砖 ----
 if [ -f "$DATA_DIR/.rescue_lock" ]; then
     log "[保护] 自动刷入已锁定 (此前检测到补丁 DTBO 被还原为原厂镜像)"
     log "[保护] 这通常表示设备经 fastboot/手动救援恢复, 已停止写入以防再次变砖"

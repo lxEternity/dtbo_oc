@@ -12,11 +12,11 @@ let sel = { hz: null, battery: null, oc_mode: null, ltpo_off: null };
 const BATT_LABELS = {
   0: ['原版电池', '保持出厂电池与充电策略'],
   1: ['解除充电限流', '电池参数保持原版'],
-  2: ['解除限流 + 电池解容', '关机 2.8V / 1% 2.85V / 充电欠压 2.7V'],
+  2: ['解除限流 + 电池解容', '关机 2.8V / 1% 2.85V / 显示真实电量'],
   3: ['6100mAh 魔改电池', '关机 3.0V / 1% 3.05V / 满充 4.54V'],
   4: ['魔改电池 + 解除限流', '同 6100mAh 并解除充电限流'],
-  5: ['原版电池 + 电池解容', '关机 2.8V / 1% 2.85V / 充电欠压 2.7V'],
-  6: ['GT7P 竞速版解容', '满充 4.55V / 关机 2.85V / 解除限流']
+  5: ['原版电池 + 电池解容', '关机 2.8V / 1% 2.85V / 显示真实电量'],
+  6: ['GT7P 竞速版解容', '满充 4.55V / 关机 2.85V / 显示真实电量']
 };
 
 function notify(message, isError = false) {
@@ -63,8 +63,8 @@ function drawLicense() {
   box.classList.toggle('bad', !okLic && !!lic);
   if (okLic) {
     $('verify-text').textContent = lic.expiry === '永久'
-      ? `已验证 QQ ${lic.qq || ''}, 永久授权`
-      : `已验证 QQ ${lic.qq || ''}, 授权有效期至 ${lic.expiry || '未知'}`;
+      ? '已验证Q群 永久'
+      : `已验证Q群 期限${lic.expiry || '未知'}`;
     $('verify-caption').textContent = '已验证';
   } else if (lic?.state === 'expired') {
     $('verify-text').textContent = `授权已过期 (QQ ${lic.qq || ''}), 请重新验证`;
@@ -129,17 +129,16 @@ function drawRates() {
   if (!state?.oc_capable) {
     sel.hz = 0;
     $('rates-caption').textContent = '本机型不支持超频';
-    if (stockHz.length) {
-      const frag = document.createDocumentFragment();
-      stockHz.forEach(hz => {
-        const b = radioButton('rate-choice stock', `${hz}Hz 原厂`, activeHz === hz, () => {}, true);
-        b.append(span('rate-number', String(hz)), span('rate-unit', 'Hz'), span('oc-label', '原厂'));
-        frag.append(b);
-      });
-      $('rates').replaceChildren(frag);
-    } else {
-      $('rates').replaceChildren(span('placeholder', '本机型不支持刷新率超频 (仅电池/充电方案)'));
-    }
+    const frag = document.createDocumentFragment();
+    stockHz.forEach(hz => {
+      const b = radioButton('rate-choice stock', `${hz}Hz 原厂`, activeHz === hz, () => {}, true);
+      b.append(span('rate-number', String(hz)), span('rate-unit', 'Hz'), span('oc-label', '原厂'));
+      frag.append(b);
+    });
+    const off = radioButton('rate-choice', '不超频', true, () => {});
+    off.append(span('rate-number', '关'), span('rate-unit', 'OC'));
+    frag.append(off);
+    $('rates').replaceChildren(frag);
     return;
   }
   stockHz.forEach(hz => {
@@ -334,10 +333,10 @@ async function verify(auto = false) {
   $('verify-auto-btn').disabled = true;
   notify(auto ? '正在自动检测本机QQ并联网验证…' : '正在联网验证QQ群成员身份…');
   try {
-    const result = await command(`verify ${arg}`, 120000);
-    notify(result.message || '验证成功。');
+    await command(`verify ${arg}`, 120000);
     $('qq-input').value = '';
     render(await command('status'));
+    notify('');
   } catch (error) {
     notify(error.message, true);
   } finally {
@@ -378,12 +377,21 @@ try { theme = JSON.parse(localStorage.getItem(THEME_KEY)) || {}; } catch { theme
 function saveTheme() {
   try { localStorage.setItem(THEME_KEY, JSON.stringify(theme)); } catch { }
 }
+let dominantColor = '';
+const modeQuery = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+function resolvedMode() {
+  const pref = theme.mode || 'auto';
+  if (pref === 'auto') return modeQuery && modeQuery.matches ? 'dark' : 'light';
+  return pref;
+}
 function applyTheme() {
   const root = document.documentElement.style;
   const glass = !!theme.glass;
   root.setProperty('--bg-show', theme.bgShow ?? 0.35);
   root.setProperty('--card-alpha', theme.cardAlpha ?? 1);
   root.setProperty('--ctl-alpha', theme.ctlAlpha ?? 1);
+  document.documentElement.dataset.mode = resolvedMode();
+  document.documentElement.dataset.accent = theme.accent || 'green';
   $('bg-layer').style.backgroundImage = theme.img ? `url(${theme.img})` : '';
   document.body.classList.toggle('glass', glass);
   document.body.classList.toggle('hoverfx', theme.hover !== false);
@@ -392,16 +400,86 @@ function applyTheme() {
   $('ctl-alpha').value = theme.ctlAlpha ?? 1;
   $('glass-toggle').checked = glass;
   $('hover-toggle').checked = theme.hover !== false;
+  const pref = theme.mode || 'auto';
+  document.querySelectorAll('#mode-seg .mini-btn').forEach(b => b.classList.toggle('on', b.dataset.mode === pref));
+  const accent = theme.accent || 'green';
+  document.querySelectorAll('#accent-row .swatch').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.accent === accent)));
+  updateStatusBar();
+}
+let themeRaf = 0;
+function scheduleTheme() {
+  if (themeRaf) return;
+  themeRaf = requestAnimationFrame(() => { themeRaf = 0; applyTheme(); });
+}
+function updateStatusBar() {
+  let color = getComputedStyle(document.documentElement).getPropertyValue('--sb').trim() || '#0c1310';
+  if (theme.img) {
+    if (dominantColor) color = dominantColor;
+    else { extractDominant(); return; }
+  }
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.setAttribute('content', color);
+  document.documentElement.style.backgroundColor = color;
+}
+function extractDominant() {
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = 8; c.height = 8;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, 8, 8);
+      const d = ctx.getImageData(0, 0, 8, 8).data;
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+      dominantColor = '#' + [r, g, b].map(v => Math.round(v / n * 0.6).toString(16).padStart(2, '0')).join('');
+    } catch { dominantColor = ''; }
+    updateStatusBar();
+  };
+  img.src = theme.img;
+}
+const panel = $('theme-panel');
+let panelTimer = 0;
+function panelOpen(open) {
+  clearTimeout(panelTimer);
+  if (open) {
+    panel.hidden = false;
+    panel.offsetHeight;
+    panel.classList.add('open');
+  } else {
+    panel.classList.remove('open');
+    panelTimer = setTimeout(() => { panel.hidden = true; }, 170);
+  }
 }
 $('theme-btn').addEventListener('click', event => {
   event.stopPropagation();
-  $('theme-panel').hidden = !$('theme-panel').hidden;
+  panelOpen(panel.hidden || !panel.classList.contains('open'));
 });
 $('theme-panel').addEventListener('click', event => event.stopPropagation());
-document.addEventListener('click', () => { $('theme-panel').hidden = true; });
+document.addEventListener('click', () => panelOpen(false));
+$('mode-seg').addEventListener('click', event => {
+  const b = event.target.closest('button[data-mode]');
+  if (!b) return;
+  theme.mode = b.dataset.mode;
+  saveTheme();
+  applyTheme();
+});
+$('accent-row').addEventListener('click', event => {
+  const b = event.target.closest('button[data-accent]');
+  if (!b) return;
+  theme.accent = b.dataset.accent;
+  saveTheme();
+  applyTheme();
+});
+if (modeQuery) {
+  const onSchemeChange = () => { if ((theme.mode || 'auto') === 'auto') applyTheme(); };
+  if (modeQuery.addEventListener) modeQuery.addEventListener('change', onSchemeChange);
+  else if (modeQuery.addListener) modeQuery.addListener(onSchemeChange);
+}
 $('bg-pick').addEventListener('click', () => $('bg-file').click());
 $('bg-clear').addEventListener('click', () => {
   delete theme.img;
+  dominantColor = '';
   saveTheme();
   applyTheme();
 });
@@ -419,6 +497,7 @@ $('bg-file').addEventListener('change', () => {
       canvas.height = Math.round(image.height * scale);
       canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
       theme.img = canvas.toDataURL('image/jpeg', 0.82);
+      dominantColor = '';
       saveTheme();
       applyTheme();
     };
@@ -426,9 +505,13 @@ $('bg-file').addEventListener('change', () => {
   };
   reader.readAsDataURL(file);
 });
-$('bg-show').addEventListener('input', () => { theme.bgShow = Number($('bg-show').value); saveTheme(); applyTheme(); });
-$('card-alpha').addEventListener('input', () => { theme.cardAlpha = Number($('card-alpha').value); saveTheme(); applyTheme(); });
-$('ctl-alpha').addEventListener('input', () => { theme.ctlAlpha = Number($('ctl-alpha').value); saveTheme(); applyTheme(); });
+const bindSlider = (id, key) => {
+  $(id).addEventListener('input', () => { theme[key] = Number($(id).value); scheduleTheme(); });
+  $(id).addEventListener('change', saveTheme);
+};
+bindSlider('bg-show', 'bgShow');
+bindSlider('card-alpha', 'cardAlpha');
+bindSlider('ctl-alpha', 'ctlAlpha');
 $('glass-toggle').addEventListener('change', () => { theme.glass = $('glass-toggle').checked; saveTheme(); applyTheme(); });
 $('hover-toggle').addEventListener('change', () => { theme.hover = $('hover-toggle').checked; saveTheme(); applyTheme(); });
 applyTheme();

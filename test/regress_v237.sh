@@ -73,7 +73,7 @@ cp $B $MOD/arm64/dtbo_oc; chmod 755 $MOD/arm64/dtbo_oc
 mkdir -p $D/work
 cp $W/members.txt $D/members.txt   # 测试构建无 --members 时读缓存 (模拟正式构建联网拉取后的名单)
 OUT=$(LIC_AUTO_DIRS=$W/qq/databases sh $MOD/bin/webuictl.sh verify auto=1 2>/dev/null)
-echo "$OUT" | grep -q '"ok":true' && echo "$OUT" | grep -q '自动验证通过' && ok "webuictl auto 成功" || bad "输出: $OUT"
+echo "$OUT" | grep -q '"ok":true' && echo "$OUT" | grep -q '"state":"ok"' && ok "webuictl auto 成功 (简洁文案)" || bad "输出: $OUT"
 rm -f "$D/license"
 OUT=$(sh $MOD/bin/webuictl.sh verify auto=1 2>/dev/null)
 echo "$OUT" | grep -q '未在本机检测到QQ/TIM账号' && ok "webuictl no_local_qq 映射" || bad "输出: $OUT"

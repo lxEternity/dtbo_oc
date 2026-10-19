@@ -331,11 +331,16 @@ static int download_members(const char *dst) {
         "wget -q -O '%s' '%s'",
         "/data/adb/magisk/busybox wget -q -O '%s' '%s'",
         NULL };
-    char url[512], cmd[1300];
+    char url[560], cmd[1300];
     for (int ui = 0; ui < 2; ui++) {
         lic_xor_dec(ui ? URL2_C : URL1_C, ui ? sizeof URL2_C : sizeof URL1_C, url);
+        /* 追加时间戳查询参数绕过 CDN 缓存 (GitHub raw 忽略查询串照常返回;
+           jsDelivr 逐完整 URL 缓存, 唯一查询串强制回源拉最新名单) —
+           修复: 群主同步白名单后, 客户端仍拿到 jsDelivr 旧缓存导致安装被误拒 */
+        char bust[600];
+        snprintf(bust, sizeof bust, "%s?_=%ld", url, (long)time(NULL));
         for (int fi = 0; fetchers[fi]; fi++) {
-            snprintf(cmd, sizeof cmd, fetchers[fi], dst, url);
+            snprintf(cmd, sizeof cmd, fetchers[fi], dst, bust);
             if (system(cmd) == 0) {
                 FILE *t = fopen(dst, "r");
                 if (t) { fclose(t); return 0; }
@@ -386,6 +391,7 @@ static int cmd_verify(const char *qq, const char *members_override) {
     char mpath[512];
     MemHit hit; memset(&hit, 0, sizeof hit);
     int look = -1;
+    int fresh = 1;      /* 名单是否可信最新: 测试构建直读名单=1; 正式构建仅联网新名单=1, 离线回退旧缓存=0 */
 #ifdef LIC_TEST_MEMBERS
     /* 仅测试构建: 允许指定本地名单文件 */
     if (members_override) snprintf(mpath, sizeof mpath, "%s", members_override);
@@ -395,6 +401,7 @@ static int cmd_verify(const char *qq, const char *members_override) {
     (void)members_override;
     snprintf(mpath, sizeof mpath, "%s", members_cache_path());
     int look_cache = members_lookup(mpath, qq, &hit);
+    fresh = 0;
     char tmp[540];
     snprintf(tmp, sizeof tmp, "%s.tmp", mpath);
     if (download_members(tmp) == 0) {
@@ -403,6 +410,7 @@ static int cmd_verify(const char *qq, const char *members_override) {
         if (lt >= 0) {      /* 名单有效 (含 GROUP 头): 无论在不在群都以云端为准 */
             rename(tmp, mpath);
             look = lt;
+            fresh = 1;
             if (lt == 1) hit = th;
         } else {
             unlink(tmp);
@@ -422,9 +430,17 @@ static int cmd_verify(const char *qq, const char *members_override) {
 #endif
     if (look < 0) { printf("VERIFIED=0 REASON=list_invalid\n"); fprintf(stderr, "[验证] 名单无效 (缺GROUP头)\n"); return 1; }
     if (look == 0) {
-        printf("VERIFIED=0 REASON=not_in_group\n");
-        fprintf(stderr, "[验证] QQ %s 不在群 %s 成员名单中\n", qq, grp);
-        fprintf(stderr, "[验证] 请先加入QQ群, 加群后需等待群主同步名单\n");
+        /* 旧缓存判"不在群"不可靠 (群主可能刚同步过白名单), 用独立 REASON 便于
+           安装流程区分: 不硬性阻止安装, 开机 service.sh 联网复验再拦截实际刷入 */
+        if (fresh) {
+            printf("VERIFIED=0 REASON=not_in_group\n");
+            fprintf(stderr, "[验证] QQ %s 不在群 %s 成员名单中\n", qq, grp);
+            fprintf(stderr, "[验证] 请先加入QQ群, 加群后需等待群主同步名单\n");
+        } else {
+            printf("VERIFIED=0 REASON=not_in_group_cached\n");
+            fprintf(stderr, "[验证] 离线使用了旧名单缓存: QQ %s 不在缓存名单中\n", qq);
+            fprintf(stderr, "[验证] 名单可能已更新, 请联网后重新验证\n");
+        }
         return 1;
     }
     return verify_issue(qq, &hit, machine);
@@ -536,6 +552,7 @@ static int cmd_verify_auto(const char *members_override) {
     char grp[16]; lic_group(grp);
     char machine[17]; get_machine(machine);
     char mpath[512];
+    int fresh = 1;      /* 名单是否可信最新: 测试构建直读名单=1; 正式构建仅联网新名单=1, 离线回退旧缓存=0 */
 #ifdef LIC_TEST_MEMBERS
     if (members_override) snprintf(mpath, sizeof mpath, "%s", members_override);
     else snprintf(mpath, sizeof mpath, "%s", members_cache_path());
@@ -543,9 +560,10 @@ static int cmd_verify_auto(const char *members_override) {
     (void)members_override;
     snprintf(mpath, sizeof mpath, "%s", members_cache_path());
     int have_cache = members_lookup(mpath, "0", NULL);
+    fresh = 0;
     char tmp[540];
     snprintf(tmp, sizeof tmp, "%s.tmp", mpath);
-    if (download_members(tmp) == 0 && members_lookup(tmp, "0", NULL) >= 0) rename(tmp, mpath);
+    if (download_members(tmp) == 0 && members_lookup(tmp, "0", NULL) >= 0) { rename(tmp, mpath); fresh = 1; }
     else {
         unlink(tmp);
         if (have_cache < 0) {
@@ -567,9 +585,15 @@ static int cmd_verify_auto(const char *members_override) {
     }
     if (look < 0) { printf("VERIFIED=0 REASON=list_invalid\n"); fprintf(stderr, "[验证] 名单无效 (缺GROUP头)\n"); return 1; }
     if (!hitqq[0]) {
-        printf("VERIFIED=0 REASON=not_in_group\n");
-        fprintf(stderr, "[验证] 本机QQ账号均不在群 %s 成员名单中\n", grp);
-        fprintf(stderr, "[验证] 请先加入QQ群, 加群后需等待群主同步名单\n");
+        if (fresh) {
+            printf("VERIFIED=0 REASON=not_in_group\n");
+            fprintf(stderr, "[验证] 本机QQ账号均不在群 %s 成员名单中\n", grp);
+            fprintf(stderr, "[验证] 请先加入QQ群, 加群后需等待群主同步名单\n");
+        } else {
+            printf("VERIFIED=0 REASON=not_in_group_cached\n");
+            fprintf(stderr, "[验证] 离线使用了旧名单缓存: 本机QQ均不在缓存名单中\n");
+            fprintf(stderr, "[验证] 名单可能已更新, 请联网后重新验证\n");
+        }
         return 1;
     }
     int rc = verify_issue(hitqq, &hit, machine);
@@ -1253,7 +1277,11 @@ static int scan_timing_nodes(Dts *d, TNode *nodes, int max_nodes) {
    每次补丁都从干净的原厂基准节点集合重建。
    纯数字名节点 (timing@0/1 等) 为原厂 sim/bridge/触控采样索引档,
    无论 rate 多高一律不剥离 (如一加15 sim 面板 240Hz 触控采样档)。 */
-static int strip_timing_nodes(Dts *d, TNode *nodes, int nn, uint32_t above, int verbose) {
+/* only_fam 非空时仅剥离名字含该家族子串的节点 (gt7p2: 同 DTBO 内 GT8/GT8Pro
+   面板 fhd_sdc/wqhd_sdc 的原厂 144 档必须保留, 否则 checkoc MISSING>0 触发
+   OTA 误判, 每次开机把 STOCK 原厂基准覆盖为已修改镜像) */
+static int strip_timing_nodes(Dts *d, TNode *nodes, int nn, uint32_t above,
+                              const char *only_fam, int verbose) {
     int stripped = 0;
     int last_del_start = d->n + 1;   /* 防嵌套误删: 已删区间的起始行 */
     for (int i = nn - 1; i >= 0; i--) {
@@ -1261,6 +1289,7 @@ static int strip_timing_nodes(Dts *d, TNode *nodes, int nn, uint32_t above, int 
         if (t->has_rate != 1) continue;
         if (t->name[0] >= '0' && t->name[0] <= '9') continue;
         if (t->rate <= above) continue;
+        if (only_fam && !strstr(t->name, only_fam)) continue;
         if (t->end > last_del_start) continue;   /* 与已删区间重叠, 保守跳过 */
         if (verbose)
             fprintf(stderr, "[剥离] timing@%s (%uHz > %u) 删除行 %d-%d\n",
@@ -1323,6 +1352,11 @@ typedef struct {
     int min_clone;  /* 静态最小克隆 (op13): porch/phy/vsync/transfer 全部原样,
                        仅 framerate + clockrate 纯等比缩放 (基准 x hz/base_hz),
                        一加13 AA569 实机验证模型 (社区镜像 130/141/144/150 逐属性吻合) */
+    int gt7p2;  /* GT7 Pro 竞速版新平台 (lafa/AC180): 静态最小克隆 — 基准固定原厂
+                   120 档, porch/phy/vsync/adfr 保留原值, 仅改 name/framerate/
+                   clockrate/transfer; margin 复用 GT7P 实测 (>=144:1.0208, 与
+                   同 DTBO AE084 面板原厂 144 档 1.0206 吻合), transfer>=144 用
+                   AE084 原厂比例 0.884 (6900->6100) */
 } PatchCfg;
 
 static uint64_t clock_override(const PatchCfg *c, int hz) {
@@ -1386,9 +1420,11 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
     TNode *nodes = xmalloc(sizeof(TNode) * MAX_NODES);
     int nn = scan_timing_nodes(d, nodes, MAX_NODES);
     /* 脏基准清理 (strip_above>0): 剥离旧版模组/社区镜像遗留的 OC 克隆节点,
-       保证克隆基准与 cell-index 分配始终基于原厂节点集合 */
+       保证克隆基准与 cell-index 分配始终基于原厂节点集合;
+       gt7p2: 仅剥本机面板家族 sdc_fhd, GT8/GT8Pro 面板原厂档位不动 */
     if (cfg->strip_above) {
-        int stripped = strip_timing_nodes(d, nodes, nn, cfg->strip_above, verbose);
+        const char *sf = cfg->gt7p2 ? "sdc_fhd" : NULL;
+        int stripped = strip_timing_nodes(d, nodes, nn, cfg->strip_above, sf, verbose);
         if (stripped > 0) {
             fprintf(stderr, "[剥离] 清理遗留 OC 克隆节点 %d 个 (rate > %u, 重建为干净基准)\n",
                 stripped, cfg->strip_above);
@@ -1470,8 +1506,8 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             snprintf(pb[npb].fam, sizeof(pb[npb].fam), "%s", fam);
             npb++; continue;
         }
-        if (cfg->gt7p) {
-            /* gt7p: 基准固定为原厂 120 档 (sa_fhd 家族唯一克隆源, 实机验证基准);
+        if (cfg->gt7p || cfg->gt7p2) {
+            /* gt7p/gt7p2: 基准固定为原厂 120 档 (实机验证基准);
                防止已含 OC 档 (130/142/144) 的镜像把克隆档误选为基准 */
             if (t->rate == 120) pb[found].base_idx = i;
         } else if (nodes[pb[found].base_idx].rate < t->rate) pb[found].base_idx = i;
@@ -1560,9 +1596,11 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
         TNode *B = &nodes[pb[k].base_idx];
         /* 动态基准最小克隆模式: 基准带 dyn-clk-list (panel 级 dsi-dyn-clk-enable) 时,
            克隆档保留 dyn-clk-list (全部 cell 等比缩放) 与 porch/phy/vsync 原值,
-           仅改 名字/framerate/clockrate/transfer/adfr — 与 GT7P 实机验证模式同思路 */
+           仅改 名字/framerate/clockrate/transfer/adfr — 与 GT7P 实机验证模式同思路;
+           gt7p2 (静态最小克隆): AC180/AE084 静态基准, 同样保留 porch/phy 原值 */
         int dyn_min = (B->is_dynamic && !cfg->gt7p && !B->is_mtk) ||
-                      (cfg->min_clone && !B->is_mtk);
+                      (cfg->min_clone && !B->is_mtk) ||
+                      (cfg->gt7p2 && !B->is_mtk);
         char bfam[160];
         name_has_hz_suffix(B->name, bfam, sizeof(bfam));
         if (B->rate < 60) continue;
@@ -1651,8 +1689,10 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             if (B->has_transfer) {
                 if (dyn_min) {
                     /* 动态基准最小克隆: 沿用 GT7P 实测标定 (142/144 档 6290->5900, 即 x0.938;
-                       低档位保持基准值), 避免过度压缩 MDP 传输预算 */
-                    ntransfer = hz >= 142 ? (uint32_t)((double)B->transfer * 0.938 + 0.5) : B->transfer;
+                       低档位保持基准值), 避免过度压缩 MDP 传输预算;
+                       gt7p2: 用同 DTBO AE084 面板原厂 144 档比例 0.884 (6900->6100) */
+                    double tf = cfg->gt7p2 ? 0.884 : 0.938;
+                    ntransfer = hz >= 142 ? (uint32_t)((double)B->transfer * tf + 0.5) : B->transfer;
                 } else {
                     ntransfer = (uint32_t)clamp_round(B->transfer * interp3(p, 0.89030, 0.76312), 100, 1000000 / hz - 1);
                 }
@@ -1789,7 +1829,8 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                 if (nins >= 512) die("插入块过多");
             }
             added++;
-            if (dyn_min) dyn_added++;
+            /* gt7p2 克隆静态节点 (无 dyn-clk-list), 不计入动态克隆数 */
+            if (dyn_min && !cfg->gt7p2) dyn_added++;
             if (verbose) {
                 if (cfg->gt7p)
                     fprintf(stderr, "[OK] %s -> 新增 %s (clock=%llu dyn-clk0=%llu adfr=%u%s transfer=%s)\n",
@@ -1797,6 +1838,9 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                         tr ? tr->adfr1 : (uint32_t)hz,
                         (tr ? tr->adfr2 : (hz >= 142 ? 72 : 0)) ? "/72" : "/原值",
                         (tr && tr->transfer) ? "5900(实测)" : "原值");
+                else if (cfg->gt7p2)
+                    fprintf(stderr, "[OK] %s -> 新增 %s [gt7p2最小克隆] (clock=%llu porch/phy/vsync/adfr=原值 transfer=%u)\n",
+                        B->name, newname, (unsigned long long)newclk, ntransfer);
                 else if (dyn_min)
                     fprintf(stderr, "[OK] %s -> 新增 %s [动态最小克隆] (clock=%llu dyn缩放比=%.4f porch/phy/vsync=原值 transfer=%u)\n",
                         B->name, newname, (unsigned long long)newclk,
@@ -1867,6 +1911,7 @@ typedef struct {
     int strat_hits;         /* oplus 策略表电流位放大计数 (新平台解除限流) */
     int saw_cap;            /* 见到 qcom,batt_capacity_mah 属性 (魔改机型指纹) */
     int gt7p_hits;          /* gt7p 解容: 替换/放大计数 (电压/电流/iclmax) */
+    int hidden_hits;        /* 解容真实电量: hidden_soc_percent 归零计数 */
 } BattCfg;
 
 /* 电池方案模式分组 */
@@ -2038,6 +2083,25 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
             changed++;
             bc->v2800_hits++;
             if (verbose) fprintf(stderr, "[BATT] %s -> %umV (电池解容)\n", pn, nv2800);
+            if (close_br && ndepth > 0) { free(nstack[--ndepth]); }
+            continue;
+        }
+        /* 解容显示真实电量: oplus,hidden_soc_percent 为官方平滑显示隐藏的底部电量区段
+           (如 0x14=20%), 解容后归零, UI 直接显示 BMS 实际电量 (参考 opbatt "实际电量值" 方案);
+           仅替换已存在且非 0 的节点, gt7p/gt7p2 原厂已为 0x00 保持零漂移 */
+        if ((v2800 || gt7p) && !strcmp(pn, "oplus,hidden_soc_percent")) {
+            uint32_t hv = parse_u32_from_val(val);
+            if (hv != 0) {
+                char *ws = lead_ws(line);
+                char body[256];
+                snprintf(body, sizeof body, "%s%s = <0x0>;", ws, pn);
+                free(ws);
+                free(d->lines[i]);
+                d->lines[i] = xstrdup(body);
+                changed++;
+                bc->hidden_hits++;
+                if (verbose) fprintf(stderr, "[BATT] oplus,hidden_soc_percent %u%% -> 0%% (解容显示真实电量)\n", hv);
+            }
             if (close_br && ndepth > 0) { free(nstack[--ndepth]); }
             continue;
         }
@@ -2315,6 +2379,7 @@ static int verify_battery_dts(Dts *d, const BattCfg *bc) {
     int v2800_ok = 0, v2800_bad = 0, v2800_seen = 0;
     int gt7p_ffc_ok = 0, gt7p_ffc_bad = 0;
     int gt7p_voff_ok = 0, gt7p_voff_bad = 0;
+    int hidden_bad = 0;
     const int modify    = BATT_MODIFY(bc->mode);
     const int del_limit = BATT_DEL_LIMIT(bc->mode);
     const int v2800     = BATT_V2800(bc->mode);
@@ -2372,9 +2437,17 @@ static int verify_battery_dts(Dts *d, const BattCfg *bc) {
             uint32_t v = parse_u32_from_val(val);
             if (v == 4520u) oplus_full_seen = 1;
             else if (v == 4540u) oplus_full_ok = 1;
+        } else if ((v2800 || gt7p) && !strcmp(pn, "oplus,hidden_soc_percent")) {
+            /* 解容真实电量: 该节点存在则必须已归零 (官方平滑显示的隐藏区段) */
+            uint32_t v = parse_u32_from_val(val);
+            if (v != 0) hidden_bad++;
         } else if (del_limit && batt_should_remove(pn)) {
             bad_removed++;
         }
+    }
+    if ((v2800 || gt7p) && hidden_bad) {
+        fprintf(stderr, "[VERIFY][FAIL] 解容真实电量校验失败 (hidden_soc_percent 非0: %d 行)\n", hidden_bad);
+        return -1;
     }
     if (modify && (!cap_ok || (off_seen && !off_ok) || (p1_seen && !p1_ok) ||
                    (oplus_full_seen && !oplus_full_ok))) {
@@ -3105,12 +3178,12 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
             "GT7P解容(满充4.55V/关机2.85V/解除限流)"
         };
         if (bc->mode == 6)
-            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 解容替换/放大 x%d)\n",
-                out_path, out_n, total_added, mdesc[6], bc->gt7p_hits);
+            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 解容替换/放大 x%d 真实电量 x%d)\n",
+                out_path, out_n, total_added, mdesc[6], bc->gt7p_hits, bc->hidden_hits);
         else
-            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 容量x%d 关机3.0V x%d 1%%电压x%d 电压段x%d 关机2800替换x%d插入x%d 删限流x%d 策略电流x%d)\n",
+            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 容量x%d 关机3.0V x%d 1%%电压x%d 电压段x%d 关机2800替换x%d插入x%d 删限流x%d 策略电流x%d 真实电量x%d)\n",
                 out_path, out_n, total_added, mdesc[bc->mode], bc->cap_hits, bc->voff_hits, bc->v1p_hits, bc->vmap_hits,
-                bc->v2800_hits, bc->v2800_ins, bc->removed_lines, bc->strat_hits);
+                bc->v2800_hits, bc->v2800_ins, bc->removed_lines, bc->strat_hits, bc->hidden_hits);
     }
     else
         printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位%s, DTBO total %zu)\n", out_path, out_n, total_added,
@@ -3150,6 +3223,8 @@ int main(int argc, char **argv) {
             "                         N = 机型原厂最高档, identify 输出 STRIP_ABOVE)\n"
             "      [--margin-low 1.012205] [--margin-high 1.021537] [--no-phy]\n"
             "      [--gt7p]  GT7 Pro 竞速版简单克隆模式 (sa_fhd 动态基准, 保留 dyn-clk, porch/phy 原值)\n"
+            "      [--gt7p2] GT7 Pro 竞速版新平台静态最小克隆 (AC180 基准固定 120, porch/phy/adfr 原值,\n"
+            "                clock margin 实测标定 >=144:1.0208, transfer>=144 x0.884)\n"
             "      [--battery 0-6]  0=不改(默认)\n"
             "                      1=解除充电限流 (全机型: 老平台删qcom限流节点/新平台策略表电流x2)\n"
             "                      2=解除充电限流+关机电压2800 电池解容 (全机型)\n"
@@ -3169,7 +3244,7 @@ int main(int argc, char **argv) {
     int battery = 0;
     uint32_t strip_above = 0;
     double mlow = 1.012205, mhigh = 1.021537;
-    int no_phy = 0, verbose = 0, gt7p = 0, multifam = 0, min_clone = 0;
+    int no_phy = 0, verbose = 0, gt7p = 0, multifam = 0, min_clone = 0, gt7p2 = 0;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--img") && i+1 < argc) img = argv[++i];
         else if (!strcmp(argv[i], "--stock-img") && i+1 < argc) stock = argv[++i];
@@ -3190,6 +3265,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--auto")) auto_verify = 1;
         else if (!strcmp(argv[i], "--no-phy")) no_phy = 1;
         else if (!strcmp(argv[i], "--gt7p")) gt7p = 1;
+        else if (!strcmp(argv[i], "--gt7p2")) gt7p2 = 1;
         else if (!strcmp(argv[i], "--multifam")) multifam = 1;
         else if (!strcmp(argv[i], "--min-clone")) min_clone = 1;
         else if (!strcmp(argv[i], "-v")) verbose = 1;
@@ -3246,6 +3322,7 @@ int main(int argc, char **argv) {
         cfg.margin_low = mlow; cfg.margin_high = mhigh;
         cfg.modify_phy = !no_phy;
         cfg.gt7p = gt7p;
+        cfg.gt7p2 = gt7p2;
         cfg.multifam = multifam;
         cfg.strip_above = strip_above;
         cfg.min_clone = min_clone;

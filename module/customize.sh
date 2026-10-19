@@ -51,7 +51,6 @@ CONFIG="$DATA_DIR/config"
 LOG="$DATA_DIR/install.log"
 mkdir -p "$DATA_DIR" "$WORK" "$DATA_DIR/ko"
 
-# ---- v2.37 QQ群验证: 安装时自动检测本机QQ并联网核对群名单 ----
 LICOUT=$("$TOOL" license 2>/dev/null)
 case "$LICOUT" in
     LICENSE=ok*)
@@ -76,6 +75,10 @@ case "$LICOUT" in
             ui_print "*********************************************************"
             "$TOOL" joingroup 2>/dev/null
             abort
+        elif [ "$VREASON" = "not_in_group_cached" ]; then
+            ui_print "  联网刷新群名单失败, 已用本地缓存核对: 本机QQ暂不在名单中"
+            ui_print "  (名单可能已更新; 模块可安装, 开机联网后会自动重新验证)"
+            ui_print "  (未验证通过前不会修改DTBO/不会挂载KO)"
         else
             case "$VREASON" in
                 no_local_qq)     ui_print "  未检测到本机QQ账号, 安装后可在 WebUI/菜单手动验证" ;;
@@ -266,7 +269,6 @@ fi
 if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" ]; }; then
     ui_print " "
     ui_print "- 请用 [音量+/音量-] 切换选项, [电源键] 确认"
-    ui_print "  (按键事件已被拦截: 电源键确认不会息屏, 音量键不会弹音量条)"
 
     MODE_INIT=0
     [ "${OC_MODE:-dtbo}" = "ko" ] && MODE_INIT=1
@@ -321,10 +323,10 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
     elif [ "$DEVICE" = "gt7p" ]; then
         GT_INIT=0
         [ "${BATTERY:-0}" = "6" ] && GT_INIT=1
-        ui_choose "电池/充电方案:" "保持原版电池|GT7P 竞速版解容 (满充4.55V/关机2.85V/解除充电限流)" "$GT_INIT"
+        ui_choose "电池/充电方案:" "保持原版电池|GT7P 竞速版解容 (满充4.55V/关机2.85V/解除限流/显示真实电量)" "$GT_INIT"
         BATTERY=$([ "$SEL" = "1" ] && echo 6 || echo 0)
     else
-        BAT_MENU="保持原版电池|解除充电限流|解除充电限流 + 电池解容 (关机2.8V/1%2.85V/充电欠压2.7V)|原版电池 + 电池解容 (关机2.8V/1%2.85V/充电欠压2.7V)"
+        BAT_MENU="保持原版电池|解除充电限流|解除充电限流 + 电池解容 (关机2.8V/1%2.85V/显示真实电量)|原版电池 + 电池解容 (关机2.8V/1%2.85V/显示真实电量)"
         BAT_MODES="0 1 2 5"
         if [ "$BATT_OK" = "1" ]; then
             BAT_MENU="$BAT_MENU|6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)|6100mAh 魔改电池 + 解除充电限流"
@@ -421,11 +423,11 @@ case "$BATTERY" in
         ui_print "*********************************************************"
         ;;
     2|5)
-        ui_print "- 已选择: 电池解容 (关机 2.8V / 1% 2.85V / 充电欠压 2.7V)"
+        ui_print "- 已选择: 电池解容 (关机 2.8V / 1% 2.85V / 显示真实电量)"
         [ "$BATTERY" = "2" ] && ui_print "- 已选择: 解除充电限流"
         ;;
     6)
-        ui_print "- 已选择: GT7P 竞速版解容 (满充 4.55V / 关机 2.85V / 解除充电限流)"
+        ui_print "- 已选择: GT7P 竞速版解容 (满充 4.55V / 关机 2.85V / 显示真实电量)"
         ;;
     1)
         ui_print "- 已选择: 解除充电限流 (电池参数保持原版)"

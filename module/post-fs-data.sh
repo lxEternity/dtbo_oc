@@ -32,7 +32,6 @@ mkdir -p "$DATA_DIR" "$WORK" "$DATA_DIR/ko" "$DATA_DIR/ko_abi"
 : > "$KOLOG"
 chmod 755 "$TOOL" "$DTC" "$GUARD" 2>/dev/null
 
-# ---- v2.36 QQ 群验证门禁: 未验证不挂载 KO (开机早期无网络, 仅检查本地授权) ----
 LICOUT=$("$TOOL" license 2>/dev/null)
 case "$LICOUT" in
     LICENSE=ok*) : ;;

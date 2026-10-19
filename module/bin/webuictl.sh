@@ -96,7 +96,7 @@ case "$DEVICE" in
     ace6t)     CHOICES=$(expand_hz 185) ;;
     ace6u)     CHOICES="185" ;;
     ace5p)     CHOICES=$(expand_hz 144) ;;
-    gt7p2)     CHOICES=$(expand_hz 144) ;;
+    gt7p2)     CHOICES=$(expand_hz 150) ;;
     op11)      CHOICES="" ;;
 esac
 
@@ -544,16 +544,8 @@ EOF
         fi
         VRC=$?
         if [ "$VRC" = "0" ]; then
-            VEXP=$(printf '%s\n' "$VOUT" | sed -n 's/.*EXPIRY_DATE=//p')
-            case "$VOUT" in *PERMANENT=1*)
-                if [ "$AUTO" = "1" ]; then VMSG="自动验证通过 (本机QQ在群内), 永久授权"; else VMSG="QQ群验证通过, 永久授权"; fi ;;
-            *)
-                if [ "$AUTO" = "1" ]; then VMSG="自动验证通过 (本机QQ在群内), 授权30天 (有效期至 ${VEXP:-未知})"; else VMSG="QQ群验证通过, 授权30天 (有效期至 ${VEXP:-未知})"; fi ;;
-            esac
             lic_query
-            printf '{"ok":true,"message":'
-            printf '%s' "$VMSG" | json_string
-            printf ',"license":{"state":"%s","qq":' "$LIC_STATE"
+            printf '{"ok":true,"message":"验证成功","license":{"state":"%s","qq":' "$LIC_STATE"
             printf '%s' "$LIC_QQ" | json_string
             printf ',"expiry":'
             printf '%s' "$LIC_EXP" | json_string
@@ -564,6 +556,7 @@ EOF
         case "$REASON" in
             bad_qq)          fail "QQ号格式无效 (5-11位数字, 不以0开头)" ;;
             not_in_group)    if [ "$AUTO" = "1" ]; then fail "本机QQ均不在群成员名单中; 请先加入QQ群, 加群后需等待群主同步名单"; else fail "该QQ号不在群成员名单中; 请先加入QQ群, 加群后需等待群主同步名单"; fi ;;
+            not_in_group_cached) fail "联网刷新群名单失败, 本地缓存名单中暂无该QQ; 名单可能已更新, 请检查网络后重试" ;;
             no_local_qq)     fail "未在本机检测到QQ/TIM账号, 请手动输入QQ号验证" ;;
             machine_not_allowed)
                 VMID=$(printf '%s\n' "$VOUT" | sed -n 's/.*MACHINE=//p')
