@@ -49,13 +49,41 @@ async function command(args, timeoutMs = 60000) {
   }
 }
 
+function licBlocked() {
+  const licOk = state?.license?.state === 'ok';
+  const needOC = (sel.hz ?? 0) > 0 || (sel.oc_mode === 'dtbo' && (sel.battery ?? 0) > 0);
+  return !licOk && needOC;
+}
+
+function drawLicense() {
+  const lic = state?.license;
+  const box = $('verify-state');
+  const okLic = lic?.state === 'ok';
+  box.classList.toggle('ok', okLic);
+  box.classList.toggle('bad', !okLic && !!lic);
+  if (okLic) {
+    $('verify-text').textContent = `已验证 QQ ${lic.qq || ''}, 授权有效期至 ${lic.expiry || '未知'}`;
+    $('verify-caption').textContent = '已验证';
+  } else if (lic?.state === 'expired') {
+    $('verify-text').textContent = `授权已过期 (QQ ${lic.qq || ''}), 请重新验证`;
+    $('verify-caption').textContent = '已过期';
+  } else if (lic?.state === 'bad') {
+    $('verify-text').textContent = '授权文件无效, 请重新验证';
+    $('verify-caption').textContent = '无效';
+  } else {
+    $('verify-text').textContent = '未验证 — 使用超频/刷入功能需先验证已加入QQ群';
+    $('verify-caption').textContent = '未验证';
+  }
+}
+
 function controls() {
   const ready = connected && state && !busy;
+  const blocked = licBlocked();
   document.body.classList.toggle('busy', busy);
   $('refresh').disabled = busy;
-  $('apply').disabled = !ready;
+  $('apply').disabled = !ready || blocked;
   $('restore').disabled = !ready || busy;
-  $('apply-label').textContent = busy ? '正在处理…' : '保存并应用';
+  $('apply-label').textContent = busy ? '正在处理…' : blocked ? '需先完成QQ群验证' : '保存并应用';
   const hzText = sel.hz === 0 ? '不超频' : sel.hz ? `${sel.hz}Hz` : '—';
   const modeText = sel.oc_mode === 'ko' ? 'KO 挂载' : sel.oc_mode === 'dtbo' ? 'DTBO 补丁' : '—';
   $('selection').textContent = `${hzText} · ${modeText}`;
@@ -211,6 +239,7 @@ function render(data, applied = false) {
     $('current-detail').textContent = data.dtbo_patched ? 'DTBO: 已修改' : 'DTBO: 原厂';
   }
   $('ltpo-off').checked = data.ltpo_off === 1;
+  drawLicense();
   drawRates();
   drawBatts();
   drawModes();
@@ -239,6 +268,10 @@ async function refresh(manual) {
 
 async function apply() {
   if (busy || !connected || !state) return;
+  if (licBlocked()) {
+    notify('请先完成QQ群验证: 在上方输入QQ号并点击验证。', true);
+    return;
+  }
   busy = true;
   controls();
   notify('正在保存配置并应用… (DTBO 方案包含解包/打包/刷入, 请稍候)');
@@ -276,6 +309,31 @@ async function restore() {
   }
 }
 
+async function verify() {
+  if (busy) return;
+  const qq = $('qq-input').value.trim();
+  if (!/^[1-9][0-9]{4,10}$/.test(qq)) {
+    notify('请输入正确的QQ号 (5-11位数字, 不以0开头)', true);
+    return;
+  }
+  busy = true;
+  controls();
+  $('verify-btn').disabled = true;
+  notify('正在联网验证QQ群成员身份… (需拉取群成员名单, 请稍候)');
+  try {
+    const result = await command(`verify qq=${qq}`, 120000);
+    notify(result.message || '验证成功。');
+    $('qq-input').value = '';
+    render(await command('status'));
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    busy = false;
+    $('verify-btn').disabled = false;
+    controls();
+  }
+}
+
 ['rates', 'batts', 'modes'].forEach(id => $(id).addEventListener('keydown', event => {
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
   const options = [...$(id).querySelectorAll('button:not(:disabled)')];
@@ -294,6 +352,10 @@ $('ltpo-off').addEventListener('change', () => {
 $('refresh').addEventListener('click', () => refresh(true));
 $('apply').addEventListener('click', apply);
 $('restore').addEventListener('click', restore);
+$('verify-btn').addEventListener('click', verify);
+$('qq-input').addEventListener('keydown', event => {
+  if (event.key === 'Enter') verify();
+});
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) refresh(false);
 });

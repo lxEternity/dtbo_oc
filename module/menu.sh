@@ -162,10 +162,45 @@ choose() {
 }
 
 echo "=============================================="
-echo " 超频解容模块 v2.35 — 配置菜单"
+echo " 超频解容模块 v2.36 — 配置菜单"
 echo " 机型: $DEVNAME ($DEVICE)"
 echo "$TIPS"
 echo "=============================================="
+
+# ---- v2.36 QQ 群验证: 未验证则禁止使用超频功能 ----
+LICOUT=$("$TOOL" license 2>/dev/null)
+case "$LICOUT" in
+    LICENSE=ok*)
+        LIC_QQ=$(printf '%s\n' "$LICOUT" | sed -n 's/^LICENSE=ok QQ=\([0-9]*\) .*/\1/p')
+        LIC_EXP=$(printf '%s\n' "$LICOUT" | sed -n 's/.*EXPIRY_DATE=//p')
+        echo " QQ群验证: 已通过 (QQ $LIC_QQ, 有效期至 $LIC_EXP)"
+        ;;
+    *)
+        echo " QQ群验证: 未通过"
+        echo "----------------------------------------------"
+        echo " 使用本模块生成/刷入超频补丁, 需先验证QQ已入群"
+        echo " (验证需联网拉取群成员名单, 通过后授权30天)"
+        VERIFY_OK=0
+        TRIES=0
+        while [ "$TRIES" -lt 3 ] && [ "$VERIFY_OK" != "1" ]; do
+            printf " 请输入QQ号进行验证 (直接回车退出): "
+            if ! read QQIN; then break; fi
+            [ -z "$QQIN" ] && break
+            if "$TOOL" verify --qq "$QQIN"; then
+                VERIFY_OK=1
+            else
+                TRIES=$((TRIES+1))
+                echo " 验证未通过 (剩余尝试: $((3 - TRIES)))"
+            fi
+        done
+        if [ "$VERIFY_OK" != "1" ]; then
+            echo "----------------------------------------------"
+            echo "[退出] 未完成QQ群验证, 无法使用超频功能"
+            echo "       加入QQ群后可通过本菜单 / WebUI 重新验证"
+            exit 1
+        fi
+        ;;
+esac
 
 MODE_INIT=0
 [ "$OC_MODE" = "ko" ] && MODE_INIT=1

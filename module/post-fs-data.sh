@@ -32,6 +32,17 @@ mkdir -p "$DATA_DIR" "$WORK" "$DATA_DIR/ko" "$DATA_DIR/ko_abi"
 : > "$KOLOG"
 chmod 755 "$TOOL" "$DTC" "$GUARD" 2>/dev/null
 
+# ---- v2.36 QQ 群验证门禁: 未验证不挂载 KO (开机早期无网络, 仅检查本地授权) ----
+LICOUT=$("$TOOL" license 2>/dev/null)
+case "$LICOUT" in
+    LICENSE=ok*) : ;;
+    *)
+        klog "[门禁] QQ群验证未通过 ($LICOUT), 跳过 KO 加载"
+        klog "[门禁] 请通过 WebUI 或终端菜单完成QQ群验证 (联网验证, 授权30天)"
+        exit 0
+        ;;
+esac
+
 SLOT=$(getprop ro.boot.slot_suffix)
 DTBO=""
 for d in /dev/block/by-name /dev/block/bootdevice/by-name /dev/block/soc/by-name; do

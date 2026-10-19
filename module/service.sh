@@ -220,6 +220,32 @@ elif [ "$BATTERY" = "6" ]; then
 fi
 log "方案: 档位 ${HZ_CHOICE:-0}, 电池模式 $BATTERY, 超频方案 $OC_MODE, LTPO禁用 ${LTPO_OFF:-0}"
 
+# ---- v2.36 QQ 群验证门禁: 未验证不修改 DTBO / 不挂载 KO ----
+NEED_OC=0
+[ "${HZ_CHOICE:-0}" != "0" ] && NEED_OC=1
+[ "${BATTERY:-0}" != "0" ] && NEED_OC=1
+if [ "$NEED_OC" = "1" ]; then
+    LICOUT=$("$TOOL" license 2>/dev/null)
+    case "$LICOUT" in
+        LICENSE=ok*) : ;;
+        *)
+            log "[门禁] QQ群验证未通过 ($LICOUT), 拒绝修改 DTBO / 挂载 KO"
+            log "[门禁] 请通过 WebUI 或终端菜单完成QQ群验证 (联网验证, 授权30天)"
+            ko_unload
+            if ! cmp -s "$CUR" "$STOCK"; then
+                if dd if="$STOCK" of="$DTBO" 2>>"$LOG"; then
+                    sync
+                    rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
+                    log "[门禁] 已恢复原厂 DTBO (撤销此前刷入的超频补丁)"
+                else
+                    log "[警告] 恢复原厂 DTBO 失败, 建议手动恢复或重新验证"
+                fi
+            fi
+            exit 0
+            ;;
+    esac
+fi
+
 expand_hz() {
     T=$1; L=""
     for t in 130 132 138 141 144 148 150 158 165 170 178 185 190 195 198; do

@@ -26,6 +26,16 @@
     <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
     <div id="error" class="error" role="alert" hidden></div>
 
+    <section class="setting-section" aria-labelledby="verify-heading">
+      <div class="section-heading"><h2 id="verify-heading">QQ 群验证</h2><span id="verify-caption">检测中</span></div>
+      <div class="verify-state" id="verify-state"><span class="v-dot" id="verify-dot" aria-hidden="true"></span><span id="verify-text">正在读取验证状态…</span></div>
+      <div class="verify-row">
+        <input id="qq-input" class="qq-input" type="text" inputmode="numeric" maxlength="11" placeholder="输入QQ号" autocomplete="off" aria-label="QQ号">
+        <button id="verify-btn" class="verify-button" type="button">验证</button>
+      </div>
+      <p class="hint">使用超频/刷入功能需先验证已加入指定QQ群 (验证需联网拉取群成员名单); 通过后授权30天, 到期需重新验证。</p>
+    </section>
+
     <section class="setting-section" aria-labelledby="rate-heading">
       <div class="section-heading"><h2 id="rate-heading">超频档位</h2><span id="rates-caption">自动识别中</span></div>
       <div id="rates" class="rate-grid" role="radiogroup" aria-label="选择超频档位"><div class="placeholder">正在读取可用档位…</div></div>
@@ -55,7 +65,7 @@
       <button id="restore" class="restore-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>恢复原厂 (DTBO + KO)</button>
     </section>
 
-    <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> v2.35</footer>
+    <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> v2.36</footer>
   </main>
   <script type="module" src="app.js"></script>
 </body>

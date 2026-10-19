@@ -27,7 +27,7 @@ if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
 fi
 
 ui_print "*******************************"
-ui_print " 超频解容模块 (多机型) v2.35"
+ui_print " 超频解容模块 (多机型) v2.36"
 ui_print "*******************************"
 ui_print "- 安全架构: 安装零分区写入, 不碰校验分区"
 ui_print "- 安装二进制: dtbo_oc + dtc (静态 arm64)"
@@ -422,7 +422,9 @@ else
 fi
 
 ui_print " "
-ui_print "- v2.35 安全架构: 安装过程不写入任何分区"
+ui_print "- v2.36 QQ群验证: 使用超频/刷入功能需先验证QQ已入群"
+ui_print "  (WebUI 或终端菜单输入QQ号联网验证, 授权30天)"
+ui_print "- 安全架构: 安装过程不写入任何分区"
 ui_print "  重启后 service.sh 自动: 备份原厂 -> 生成补丁 -> 刷入 dtbo"
 ui_print "  (第 1 次重启: 备份并刷入; 第 2 次重启: 新档位完整生效)"
 ui_print "- 救援保护: 补丁被还原(非OTA)时自动锁定, 防止救回后再刷"
