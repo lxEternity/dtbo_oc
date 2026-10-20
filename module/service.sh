@@ -202,6 +202,20 @@ case "$DEVICE" in
 esac
 log "机型识别: $DEVNAME ($DEVICE)"
 
+# 方案级选项 (与 customize.sh 一致): HZ_CHOICE 可为方案值或具体档位值
+# 选择任一方案 = 刷入该机型完整档位列表, 值仅作为方案标记
+PLANS=""
+case "$DEVICE" in
+    ace2pro)     PLANS="144 165 185" ;;
+    op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) PLANS="144" ;;
+    op15|op15t|ace6) PLANS="185 188 190 195 198" ;;
+    gt8)         PLANS="144 165 185 188 190 195 198" ;;
+    gt7p)        PLANS="130 142 144" ;;
+    gt7s)        PLANS="144 165 185" ;;
+    gt8p)        PLANS="165 185" ;;
+    ace6t|ace6u) PLANS="185" ;;
+esac
+
 if [ "$OC_OK" != "1" ] || [ -z "$CHOICES" ]; then
     if [ "${HZ_CHOICE:-0}" != "0" ]; then
         log "[提示] 本机型不支持刷新率超频, 已忽略档位设置 (HZ_CHOICE=$HZ_CHOICE)"
@@ -210,7 +224,7 @@ if [ "$OC_OK" != "1" ] || [ -z "$CHOICES" ]; then
 else
     VALID=0
     [ "$HZ_CHOICE" = "0" ] && VALID=1
-    for c in $CHOICES; do [ "$HZ_CHOICE" = "$c" ] && VALID=1; done
+    for c in $CHOICES $PLANS; do [ "$HZ_CHOICE" = "$c" ] && VALID=1; done
     if [ "$VALID" != "1" ]; then
         log "[提示] HZ_CHOICE=$HZ_CHOICE 不适用于本机型, 可选: $CHOICES 或 0(不超频), 使用默认 $DEF_HZ"
         HZ_CHOICE=$DEF_HZ

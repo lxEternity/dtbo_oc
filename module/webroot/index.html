@@ -54,8 +54,8 @@
     </section>
 
     <section class="setting-section" aria-labelledby="rate-heading">
-      <div class="section-heading"><h2 id="rate-heading">超频档位</h2><span id="rates-caption">自动识别中</span></div>
-      <div id="rates" class="rate-grid" role="radiogroup" aria-label="选择超频档位"><div class="placeholder">正在读取可用档位…</div></div>
+      <div class="section-heading"><h2 id="rate-heading">超频方案</h2><span id="rates-caption">自动识别中</span></div>
+      <div id="rates" class="rate-grid" role="radiogroup" aria-label="选择超频方案"><div class="placeholder">正在读取可用方案…</div></div>
     </section>
 
     <button id="rm-entry" class="rm-entry" type="button">
@@ -70,8 +70,8 @@
     </section>
 
     <section class="setting-section" aria-labelledby="mode-heading">
-      <div class="section-heading"><h2 id="mode-heading">超频方案</h2><span id="mode-caption">—</span></div>
-      <div id="modes" class="mode-grid" role="radiogroup" aria-label="选择超频方案"></div>
+      <div class="section-heading"><h2 id="mode-heading">挂载方式</h2><span id="mode-caption">—</span></div>
+      <div id="modes" class="mode-grid" role="radiogroup" aria-label="选择挂载方式"></div>
     </section>
 
     <section class="setting-section" aria-labelledby="ltpo-heading">
@@ -91,7 +91,7 @@
   <div id="rm-page" class="rm-page" hidden>
     <div class="rm-sheet">
       <header class="rm-topbar">
-        <button id="rm-back" class="icon-button" type="button" aria-label="返回主页面"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <button id="rm-back" class="rm-back" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>返回主页</button>
         <div class="rm-title"><h2>刷新率管理</h2><span id="rm-sub">正在读取…</span></div>
         <button id="rm-scan" class="mini-btn" type="button">扫描档位</button>
       </header>
@@ -101,7 +101,7 @@
         <section class="rm-section" id="rm-empty" hidden>
           <div class="rm-empty-card">
             <strong>尚未导入档位表</strong>
-            <small>点击右上角「扫描档位」, 从系统读取当前全部刷新率档位 (需已应用超频 DTBO / KO)。</small>
+            <small>点击右上角「扫描档位」, 从系统读取当前全部刷新率档位 (原厂/超频档均可)。</small>
           </div>
         </section>
 

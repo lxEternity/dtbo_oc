@@ -122,10 +122,20 @@ function span(className, text) {
   return element;
 }
 
+// 方案高亮: 精确匹配优先; 已保存值非方案值 (旧版档位值) 时就近映射, 仅影响显示
+function planHighlight(hz, plans) {
+  if (!plans.length) return 0;
+  if (plans.includes(hz)) return hz;
+  let best = plans[plans.length - 1];
+  for (const p of plans) { if (p >= hz) { best = p; break; } }
+  return best;
+}
+
 function drawRates() {
   const fragment = document.createDocumentFragment();
-  const choices = state?.choices || [];
-  if (!state?.oc_capable || !choices.length) {
+  const plans = (state?.plans || []).slice().sort((a, b) => a - b);
+  const gears = state?.choices || [];
+  if (!state?.oc_capable || !plans.length) {
     sel.hz = 0;
     $('rates-caption').textContent = '本机型不支持超频';
     const off = radioButton('rate-choice wide', '不超频', true, () => {});
@@ -133,12 +143,13 @@ function drawRates() {
     $('rates').replaceChildren(off);
     return;
   }
-  choices.forEach(c => {
-    const checked = sel.hz === c;
-    const b = radioButton('rate-choice overclock', `${c}Hz 超频档`, checked, () => {
+  const hi = planHighlight(sel.hz, plans);
+  plans.forEach(c => {
+    const checked = hi === c;
+    const b = radioButton('rate-choice overclock', `${c}Hz 超频方案`, checked, () => {
       sel.hz = c; dirty = true; drawRates(); controls();
     });
-    b.append(span('rate-number', String(c)), span('rate-unit', 'Hz'));
+    b.append(span('rate-number', String(c)), span('rate-unit', 'Hz 方案'));
     fragment.append(b);
   });
   const off = radioButton('rate-choice stock', '不超频', sel.hz === 0, () => {
@@ -147,7 +158,9 @@ function drawRates() {
   off.append(span('rate-number', '关'), span('rate-unit', 'OC'));
   fragment.append(off);
   $('rates').replaceChildren(fragment);
-  $('rates-caption').textContent = `可超频档 ${choices.length} 个 · 重启后生效`;
+  const range = gears.length >= 2 ? `方案含 ${gears[0]}-${gears[gears.length - 1]} 全部档位`
+    : gears.length === 1 ? `方案含 ${gears[0]} 档位` : '';
+  $('rates-caption').textContent = range ? `${range} · 重启后生效` : '重启后生效';
 }
 
 function drawBatts() {
@@ -206,8 +219,10 @@ function render(data) {
   connected = true;
   sel = { hz: data.hz, battery: data.battery, oc_mode: data.oc_mode, ltpo_off: data.ltpo_off };
   dirty = false;
-  if (sel.hz > 0 && Array.isArray(data.choices) && data.choices.length && !data.choices.includes(sel.hz)) {
-    notify(`已保存的 ${sel.hz}Hz 档位因稳定性问题已移除, 请重新选择档位。`);
+  const plans = Array.isArray(data.plans) ? data.plans : [];
+  const gears = Array.isArray(data.choices) ? data.choices : [];
+  if (sel.hz > 0 && (plans.length || gears.length) && !plans.includes(sel.hz) && !gears.includes(sel.hz)) {
+    notify(`已保存的 ${sel.hz}Hz 档位不适用于本机型, 请重新选择超频方案。`);
     sel.hz = 0;
     dirty = true;
   }
@@ -495,7 +510,7 @@ function rmDraw() {
     rows.append(span('app-empty', '尚未配置应用; 点「+ 添加应用」选择应用并设定其档位。'));
   }
   $('rm-app-rows').replaceChildren(rows);
-  const appCap = [rm.appSwitchEnabled === 1 ? '已开启' : '未开启'];
+  const appCap = [rm.appSwitchEnabled === 1 || rm.appSwitchEnabled === true ? '已开启' : '未开启'];
   appCap.push(`${pkgs.length} 个应用`);
   if (daemon) appCap.push('服务运行中');
   $('rm-app-caption').textContent = appCap.join(' · ');
@@ -606,6 +621,7 @@ $('rm-entry').addEventListener('click', () => {
   $('rm-page').hidden = false;
   document.body.classList.add('rm-open');
   rmNotify('');
+  if (rm) rmDraw();
   rmLoad();
 });
 $('rm-back').addEventListener('click', () => {

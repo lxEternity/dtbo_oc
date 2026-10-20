@@ -172,11 +172,14 @@ footer{text-align:center;color:var(--footer);font-size:8px;letter-spacing:1px;ma
 .rme-arrow{color:var(--muted);flex:none}
 .rme-arrow svg{width:15px;height:15px}
 /* ---- 刷新率管理全屏子页面 ---- */
-.rm-page{position:fixed;inset:0;z-index:80;overflow-y:auto;overscroll-behavior:contain;animation:rmIn .2s ease}
+.rm-page{position:fixed;inset:0;z-index:80;overflow-y:auto;overscroll-behavior:contain;background:radial-gradient(900px 620px at 88% -12%,var(--glow) 0%,var(--bg) 58%) var(--bg);animation:rmIn .2s ease}
 @keyframes rmIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){.rm-page{animation:none}}
 .rm-sheet{position:relative;z-index:1;max-width:460px;margin:auto;padding:0 15px calc(18px + env(safe-area-inset-bottom))}
 .rm-topbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:calc(10px + env(safe-area-inset-top)) 0 10px;background:linear-gradient(var(--bg) 72%,transparent);backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4)}
+.rm-back{display:inline-flex;align-items:center;gap:5px;height:30px;padding:0 12px 0 9px;border-radius:999px;border:1px solid var(--accent-line);background:rgba(var(--tint-rgb),var(--ctl-alpha));color:var(--accent-strong);font:inherit;font-size:11px;font-weight:600;flex:none}
+.rm-back svg{width:14px;height:14px;stroke-width:2.2}
+.rm-back:active{filter:brightness(1.2)}
 .rm-title{flex:1;min-width:0}
 .rm-title h2{font-size:15px}
 .rm-title span{display:block;font-size:9.5px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -230,7 +233,7 @@ footer{text-align:center;color:var(--footer);font-size:8px;letter-spacing:1px;ma
 .ap-pkg{font-size:9px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .app-pkg-sm{font-size:8.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;margin-left:6px}
 /* ---- 悬浮 / 液态玻璃 ---- */
-body.hoverfx :is(.rate-choice,.batt-choice,.mode-choice,.avb-toggle,.verify-state,.machine-row,.qq-input,.mini-btn,.verify-button,.restore-button,.icon-button,.swatch,.rm-entry,.rm-choice):not(:disabled):hover{transform:translateY(-2px)}
+body.hoverfx :is(.rate-choice,.batt-choice,.mode-choice,.avb-toggle,.verify-state,.machine-row,.qq-input,.mini-btn,.verify-button,.restore-button,.icon-button,.swatch,.rm-entry,.rm-choice,.rm-back):not(:disabled):hover{transform:translateY(-2px)}
 body.hoverfx .apply-button:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(var(--accent-rgb),.28)}
 body.hoverfx button:not(:disabled):hover{filter:brightness(1.07)}
 body.hoverfx .apply-button:not(:disabled):hover{filter:none}

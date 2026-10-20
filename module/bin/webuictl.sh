@@ -79,7 +79,7 @@ rm_daemon_stop() {
 }
 
 rm_cfg_json() {
-    # 输出 rc_config.json 内容 (缺省值补齐): globalId/appsw/appintv
+    # 输出 rc_config.json 裸字段 (无外层花括号, 供嵌入 rm 对象): globalId/appsw/appintv
     GID=0; ASW=1; AIV=1
     if [ -f "$RC_CFG" ]; then
         v=$(grep -o '"globalRateId"[^0-9]*[0-9]*' "$RC_CFG" 2>/dev/null | grep -o '[0-9]*$')
@@ -92,7 +92,7 @@ rm_cfg_json() {
         case "$i" in ''|*[!0-9]*) i=1 ;; esac
         [ "$i" -ge 1 ] 2>/dev/null && AIV=$i
     fi
-    printf '{"globalRateId":%s,"appSwitchEnabled":%s,"appSwitchInterval":%s}' "$GID" "$ASW" "$AIV"
+    printf '"globalRateId":%s,"appSwitchEnabled":%s,"appSwitchInterval":%s' "$GID" "$([ "$ASW" = "1" ] && echo true || echo false)" "$AIV"
 }
 
 rm_cfg_set() {
@@ -108,9 +108,17 @@ rm_cfg_set() {
     done
     CUR=$(rm_cfg_json)
     [ -z "$GID" ] && GID=$(printf '%s' "$CUR" | grep -o '"globalRateId":[0-9]*' | cut -d: -f2)
-    [ -z "$ASW" ] && ASW=$(printf '%s' "$CUR" | grep -o '"appSwitchEnabled":[0-9]*' | cut -d: -f2)
+    if [ -z "$ASW" ]; then
+        case "$CUR" in
+            *'"appSwitchEnabled":false'*) ASW=0 ;;
+            *) ASW=1 ;;
+        esac
+    fi
     [ -z "$AIV" ] && AIV=$(printf '%s' "$CUR" | grep -o '"appSwitchInterval":[0-9]*' | cut -d: -f2)
-    printf '{"globalRateId":%s,"appSwitchEnabled":%s,"appSwitchInterval":%s}' "$GID" "$ASW" "$AIV" > "$RC_CFG"
+    [ -z "$GID" ] && GID=0
+    [ -z "$ASW" ] && ASW=1
+    [ -z "$AIV" ] && AIV=1
+    printf '{"globalRateId":%s,"appSwitchEnabled":%s,"appSwitchInterval":%s}' "$GID" "$([ "$ASW" = "1" ] && echo true || echo false)" "$AIV" > "$RC_CFG"
 }
 
 rm_emit_status() {
@@ -451,6 +459,20 @@ case "$DEVICE" in
     op11)      CHOICES="" ;;
 esac
 
+# 方案级选项 (与安装脚本 customize.sh 一致): 主页"超频方案"按钮
+# 选择任一方案 = 刷入该机型完整档位列表, HZ_CHOICE 仅作为方案标记
+PLANS=""
+case "$DEVICE" in
+    ace2pro)     PLANS="144 165 185" ;;
+    op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) PLANS="144" ;;
+    op15|op15t|ace6) PLANS="185 188 190 195 198" ;;
+    gt8)         PLANS="144 165 185 188 190 195 198" ;;
+    gt7p)        PLANS="130 142 144" ;;
+    gt7s)        PLANS="144 165 185" ;;
+    gt8p)        PLANS="165 185" ;;
+    ace6t|ace6u) PLANS="185" ;;
+esac
+
 HZ=""
 BATTERY=""
 OC_MODE=""
@@ -664,6 +686,7 @@ emit_display_json() {
 
 emit_status() {
     CHOICES_JSON=$(echo "$CHOICES" | tr ' ' ',' | sed 's/^,$//;s/,$//')
+    PLANS_JSON=$(echo "$PLANS" | tr ' ' ',' | sed 's/^,$//;s/,$//')
     OC_ACTIVE=0
     if [ "$OC_MODE" = "ko" ]; then
         [ "$KO_LOADED" = "1" ] && OC_ACTIVE=1
@@ -674,7 +697,7 @@ emit_status() {
     [ -n "$DEVICE" ] && [ -f "$MODDIR/ko/$DEVICE.ko" ] && KO_BUILTIN=1
     printf '{"ok":true,"device":"%s","name":' "$DEVICE"
     printf '%s' "$DEVNAME" | json_string
-    printf ',"maxrate":"%s","choices":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$OC_OK" "$BATT_OK"
+    printf ',"maxrate":"%s","choices":[%s],"plans":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$PLANS_JSON" "$OC_OK" "$BATT_OK"
     printf '"hz":%s,"battery":%s,"oc_mode":"%s","ltpo_off":%s,"ko_only":%s,' "$HZ" "$BATTERY" "$OC_MODE" "$LTPO_OFF" "$([ "$DEVICE" = "ace6u" ] && echo true || echo false)"
     printf '"oc_active":%s,' "$OC_ACTIVE"
     printf '"rm_ready":%s,' "$([ -s "$DATA_DIR/rates.conf" ] && echo 1 || echo 0)"
@@ -754,7 +777,7 @@ case "${1:-}" in
                 hz)
                     OK=0
                     [ "$V" = "0" ] && OK=1
-                    for c in $CHOICES; do [ "$V" = "$c" ] && OK=1; done
+                    for c in $CHOICES $PLANS; do [ "$V" = "$c" ] && OK=1; done
                     [ "$OK" = "1" ] || fail "档位 $V 不适用于本机型"
                     HZ="$V"
                     ;;
