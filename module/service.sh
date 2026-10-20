@@ -7,10 +7,14 @@ WORK="$DATA_DIR/work"
 LOG="$DATA_DIR/last_run.log"
 CONFIG="$DATA_DIR/config"
 STOCK="$DATA_DIR/dtbo_stock.img"
+
 log() { echo "$@" >> "$LOG"; echo "[dtbo_oc] $@"; }
+
 mkdir -p "$DATA_DIR" "$WORK" "$WORK/ko"
 : > "$LOG"
 chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
+
+# 按应用切换 / 开机锁定守护: 等 boot 完成后按 ratectl 配置启动 (幂等)
 (
     i=0
     while [ "$i" -lt 45 ]; do
@@ -27,6 +31,7 @@ chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
     fi
     nohup sh "$MODDIR/bin/ratectl_daemon.sh" >/dev/null 2>&1 &
 ) &
+
 if [ ! -f "$CONFIG" ]; then
     cat > "$CONFIG" <<'EOF'
 HZ_CHOICE=144
@@ -43,6 +48,7 @@ fi
 sed -i '/^AVB_OFF=/d' "$CONFIG" 2>/dev/null
 [ -z "${OC_MODE:-}" ] && OC_MODE=dtbo
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
+
 LOCKED=$(getprop ro.boot.flash.locked)
 VBS=$(getprop ro.boot.verifiedbootstate)
 if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
@@ -50,6 +56,7 @@ if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
     log "[警告] 未解锁 BL 刷入修改后的 DTBO 会导致无法开机(变砖)!"
     log "[警告] 请确认已解锁 Bootloader, 否则请卸载本模块并恢复原始 DTBO"
 fi
+
 SLOT=$(getprop ro.boot.slot_suffix)
 DTBO="${DTBO_PATH:-}"
 if [ -z "$DTBO" ]; then
@@ -65,6 +72,7 @@ if [ -z "$DTBO" ]; then
 fi
 [ -z "$DTBO" ] && { log "[错误] 未找到 dtbo 分区; 可在 config 设置 DTBO_PATH"; exit 1; }
 log "dtbo 分区: $DTBO (slot=$SLOT)"
+
 ko_find() {
     if [ -f "$DATA_DIR/ko/$DEVICE.ko" ]; then
         echo "$DATA_DIR/ko/$DEVICE.ko"
@@ -72,9 +80,11 @@ ko_find() {
         echo "$MODDIR/ko/$DEVICE.ko"
     fi
 }
+
 ko_modname() {
     strings "$1" 2>/dev/null | sed -n 's/^name=//p' | head -n 1
 }
+
 ko_loaded_modname() {
     if [ -f "$DATA_DIR/ko_loaded" ]; then
         cat "$DATA_DIR/ko_loaded"
@@ -82,6 +92,7 @@ ko_loaded_modname() {
         ls /sys/module 2>/dev/null | grep -E '_185_mode$|_oc_mode$|_drm_modes$' | head -n 1
     fi
 }
+
 ko_unload() {
     local MN=$(ko_loaded_modname)
     [ -z "$MN" ] && return 0
@@ -102,6 +113,7 @@ ko_unload() {
     fi
     return 0
 }
+
 ko_status_report() {
     local KO=$(ko_find)
     if [ -z "$KO" ]; then
@@ -129,9 +141,11 @@ ko_status_report() {
     esac
     return 0
 }
+
 CUR="$WORK/current.img"
 dd if="$DTBO" of="$CUR" 2>>"$LOG" || { log "[错误] 读取 $DTBO 失败"; exit 1; }
 log "已提取当前 DTBO: $(wc -c < "$CUR") 字节"
+
 if [ ! -f "$STOCK" ]; then
     if [ -f /sdcard/dtbo_backup.img ]; then
         cp /sdcard/dtbo_backup.img "$STOCK"
@@ -141,6 +155,7 @@ if [ ! -f "$STOCK" ]; then
         log "首次运行: 当前分区已保存为原始镜像基准"
     fi
 fi
+
 rm -rf "$WORK"/ide* 2>/dev/null
 IDINFO=$("$TOOL" identify --img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>>"$LOG")
 DEVICE=$(echo "$IDINFO" | grep '^DEVICE=' | cut -d= -f2)
@@ -153,19 +168,29 @@ STRIP=$(echo "$IDINFO" | grep '^STRIP_ABOVE=' | cut -d= -f2)
 [ -z "$OC_OK" ] && OC_OK=1
 CHOICES=""
 case "$DEVICE" in
+    # 原厂120可超185: ACE2Pro (无130)
     ace2pro)   CHOICES="132 138 141 144 150 158 165 170 178 185"; DEF_HZ=144 ;;
+    # 原厂120可超144→放开到150
     op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) CHOICES="130 132 138 141 144 148 150"; DEF_HZ=144 ;;
+    # 原厂120可超185: GT7 Pro/GT7S (165实测不开机保留移除)
     gt7s)      CHOICES="130 132 138 141 144 148 150 158 170 178 185"; DEF_HZ=185 ;;
+    # GT7P竞速版 --gt7p 模式实测表
     gt7p)      CHOICES="130 142 144"; DEF_HZ=144 ;;
+    # 原厂144可超185: GT8 Pro
     gt8p)      CHOICES="148 150 158 165 170 178 185 190"; DEF_HZ=185 ;;
+    # 原厂144可超195: GT8
     gt8)       CHOICES="148 150 158 165 170 178 185 190 195 198 205"; DEF_HZ=185 ;;
+    # 原厂165可超185: ACE6T
     ace6t)     CHOICES="170 178 185 190"; DEF_HZ=185 ;;
+    # 原厂165可超195: 一加15/15T/ACE6
     op15|op15t|ace6) CHOICES="170 178 185 190 195 198 205"; DEF_HZ=185 ;;
+    # ACE6至尊版 KO 方案档位由内核模块固定
     ace6u)     CHOICES="185"; DEF_HZ=185 ;;
     op11)      CHOICES=""; DEF_HZ=0 ;;
     *) log "[中止] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
 log "机型识别: $DEVNAME ($DEVICE)"
+
 if [ "$OC_OK" != "1" ] || [ -z "$CHOICES" ]; then
     if [ "${HZ_CHOICE:-0}" != "0" ]; then
         log "[提示] 本机型不支持刷新率超频, 已忽略档位设置 (HZ_CHOICE=$HZ_CHOICE)"
@@ -180,6 +205,7 @@ else
         HZ_CHOICE=$DEF_HZ
     fi
 fi
+
 [ -z "$BATTERY" ] && BATTERY=0
 if [ "$DEVICE" = "ace6u" ] && [ "$OC_MODE" != "ko" ]; then
     log "[提示] 一加ACE6至尊版仅支持 KO 内核挂载方案, 已自动切换 (DTBO 方案已移除)"
@@ -212,6 +238,7 @@ elif [ "$BATTERY" = "6" ]; then
     BATTERY=0
 fi
 log "方案: 档位 ${HZ_CHOICE:-0}, 电池模式 $BATTERY, 超频方案 $OC_MODE, LTPO禁用 ${LTPO_OFF:-0}"
+
 NEED_OC=0
 [ "${HZ_CHOICE:-0}" != "0" ] && NEED_OC=1
 [ "${BATTERY:-0}" != "0" ] && NEED_OC=1
@@ -243,6 +270,7 @@ if [ "$NEED_OC" = "1" ]; then
             ;;
     esac
 fi
+
 if [ "$OC_MODE" = "ko" ]; then
     if [ "$HZ_CHOICE" = "0" ]; then
         log "KO 方案: 不超频, 仅确保原厂 DTBO 状态"
@@ -273,11 +301,13 @@ if [ "$OC_MODE" = "ko" ]; then
     ko_status_report
     exit 0
 fi
+
 if [ "$HZ_CHOICE" = "0" ]; then
     HZ=""
     log "本机型不超频, 仅应用电池/充电方案 (BATTERY=$BATTERY)"
     [ "$BATTERY" = "0" ] && { log "电池方案也为原版, 无需任何修改"; exit 0; }
 else
+    # 选择任一超频档位即生成机型完整档位列表 (档位切换功能需要全部档位)
     if [ "$DEVICE" = "gt7p" ]; then
         HZ="130,142,144"
     else
@@ -286,7 +316,9 @@ else
     [ -z "$HZ" ] && { log "[错误] 档位展开失败"; exit 1; }
     log "生成档位列表 (完整): $HZ (电池模式 $BATTERY, 原厂已有档位自动跳过)"
 fi
+
 ko_unload
+
 NEW="$WORK/patched.img"
 rm -rf "$WORK"/e*_* 2>/dev/null
 PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --battery $BATTERY --workdir $WORK"
@@ -298,16 +330,23 @@ PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --battery $BATTERY --workdir $WOR
 [ "$STRIP" != "0" ] && PATCH_ARGS="$PATCH_ARGS --strip-above $STRIP"
 [ "$DEVICE" = "op12" ] && PATCH_ARGS="$PATCH_ARGS --multifam --min-clone"
 [ "$DEVICE" = "op13" ] && PATCH_ARGS="$PATCH_ARGS --include-family wqhd_sdc --min-clone"
+# 静态基面板机型: 最小克隆模型 (porch/phy 保持基准原值, 时钟等比), 修复
+# interp3 插值压缩 porch/phy 超出 DDIC 底限导致的档位丢失/不开机 (社区实机验证)
+# op15/op15t/ace6/ace6t: 165 静态基准 (AD296/AA605/AA616/AA607), 标准模式 vbp 压缩 31% 不开机
+# gt8/gt8p: qsync 144 静态基准 (AE096), 同样压缩风险
+# ace2pro 除外: interp3 锚点即该机型教程实机标定, 保持标准模式
 case "$DEVICE" in
     op15|op15t|ace6|ace6t|gt8|gt8p|ace5|ace5p|ace3|ace3pro) PATCH_ARGS="$PATCH_ARGS --min-clone" ;;
 esac
 "$TOOL" patch $PATCH_ARGS >> "$LOG" 2>&1
 RC=$?
 [ "$RC" != "0" ] && [ "$RC" != "3" ] && { log "[错误] 补丁生成失败 (exit=$RC), 详情见 $LOG, 未做任何写入"; exit 1; }
+
 if cmp -s "$CUR" "$NEW"; then
     log "当前 DTBO 已是目标状态, 无需刷入"
     exit 0
 fi
+
 rm -rf "$WORK"/c*_* 2>/dev/null
 CKOUT=$("$TOOL" checkoc --img "$CUR" --stock-img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>>"$LOG")
 NOC=$(echo "$CKOUT" | grep '^NOC=' | cut -d= -f2)
@@ -328,14 +367,17 @@ if { [ "$NOC" = "0" ] || [ "$MISSING" != "0" ] || [ "$FOREIGN" != "0" ]; } && ! 
         exit 0
     fi
 fi
+
 if [ -n "$BACKUP_PATH" ] && [ ! -f "$BACKUP_PATH" ]; then
     cp "$STOCK" "$BACKUP_PATH" && log "原始镜像已备份到 $BACKUP_PATH"
 fi
+
 if [ "${FLASH:-1}" != "1" ]; then
     cp "$NEW" /sdcard/dtbo_oc_patched.img
     log "FLASH=0: 已生成 /sdcard/dtbo_oc_patched.img (手动刷入: dd if=/sdcard/dtbo_oc_patched.img of=$DTBO)"
     exit 0
 fi
+
 if [ -f "$DATA_DIR/.rescue_lock" ]; then
     log "[保护] 自动刷入已锁定 (此前检测到补丁 DTBO 被还原为原厂镜像)"
     log "[保护] 这通常表示设备经 fastboot/手动救援恢复, 已停止写入以防再次变砖"
@@ -351,6 +393,7 @@ if [ -f "$DATA_DIR/.flash_fp" ] && cmp -s "$CUR" "$STOCK"; then
         exit 0
     fi
 fi
+
 log "正在刷入 $NEW -> $DTBO"
 if ! dd if="$NEW" of="$DTBO" 2>>"$LOG"; then
     log "[错误] 刷入失败"
