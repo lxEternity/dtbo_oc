@@ -1,276 +1,324 @@
 #!/system/bin/sh
-# ratectl_daemon: 按应用切换 / 开机锁定 / 全局档位锁定 后台服务
-# 锁定档位时同步钉住系统刷新率设置 (min/peak_refresh_rate), 防止系统 ADFR
-# 自动调频与锁定档位来回拉锯 (表现为 60/120 反复跳变); 对同一目标最多
-# 重发 3 次, 之后等待前台/目标/亮屏变化, 保证绝不无限拉锯。
+# ratectl_daemon: 星驰引擎 (Astra_MaxRefresh_Pro) 式刷新率守护
+# 移植星驰核心机制: rates.conf 档位表 (id:w:h:fps:type:base:ord) +
+# 全局档位锁定 + 按应用切换 + 超频档双向逐级步进 (50ms) + 亮屏自动恢复
+# 配置 (/data/adb/dtbo_oc/):
+#   rates.conf    档位表  id:w:h:fps:type(native|overclock):base(0|1):ord
+#   rc_config.json {"globalRateId":id, "appSwitchEnabled":bool, "appSwitchInterval":sec}
+#   apps.conf     按应用规则  pkg=id
 DATA_DIR=/data/adb/dtbo_oc
-RC_CONF="$DATA_DIR/ratectl"
-RC_PID="$DATA_DIR/ratectl.pid"
-RC_LOG="$DATA_DIR/ratectl.log"
-RC_PINBAK="$DATA_DIR/ratectl.pinbak"
-WORK="$DATA_DIR/work"
-SF_LOCK=/data/local/tmp/dtbo_oc_switch.lock
-SF_PIN="$DATA_DIR/sf_pin"
-RC_SF="$WORK/rc_sf_modes.txt"
-RC_DISP="$WORK/rc_sf_displays.txt"
-PIN_CUR=""
+RATES="$DATA_DIR/rates.conf"
+CFG="$DATA_DIR/rc_config.json"
+APPS="$DATA_DIR/apps.conf"
+PIDF="$DATA_DIR/ratectl.pid"
+LOG="$DATA_DIR/ratectl.log"
+
 rclog() {
-    echo "$(date '+%m-%d %H:%M:%S') $*" >> "$RC_LOG"
-    [ -f "$RC_LOG" ] && [ "$(wc -c < "$RC_LOG")" -gt 65536 ] && tail -n 200 "$RC_LOG" > "$RC_LOG.tmp" 2>/dev/null && mv -f "$RC_LOG.tmp" "$RC_LOG"
+    echo "$(date '+%m-%d %H:%M:%S') $*" >> "$LOG"
+    [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 65536 ] && tail -n 200 "$LOG" > "$LOG.t" 2>/dev/null && mv -f "$LOG.t" "$LOG"
 }
-pin_ensure_bak() {
-    [ -s "$RC_PINBAK" ] && return 0
-    OMIN=$(settings --user 0 get system min_refresh_rate 2>/dev/null)
-    OPEAK=$(settings --user 0 get system peak_refresh_rate 2>/dev/null)
-    case "$OMIN" in ''|null) OMIN="-" ;; esac
-    case "$OPEAK" in ''|null) OPEAK="-" ;; esac
-    printf '%s %s %s\n' "$(boot_id)" "$OMIN" "$OPEAK" > "$RC_PINBAK" 2>/dev/null
-    return 0
-}
-pin_settings() {
-    # 将系统刷新率上下限都钉到目标档位, ADFR 不再把档位拉回 60
-    [ "$PIN_CUR" = "$1" ] && return 0
-    pin_ensure_bak
-    settings --user 0 put system min_refresh_rate "$1" 2>/dev/null
-    settings --user 0 put system peak_refresh_rate "$1" 2>/dev/null
-    PIN_CUR=$1
-    return 0
-}
-pin_restore() {
-    [ -s "$RC_PINBAK" ] || return 0
-    [ "$(cut -d' ' -f1 "$RC_PINBAK" 2>/dev/null)" = "$(boot_id)" ] || { rm -f "$RC_PINBAK"; return 0; }
-    OMIN=$(cut -d' ' -f2 "$RC_PINBAK"); OPEAK=$(cut -d' ' -f3 "$RC_PINBAK")
-    if [ "$OMIN" = "-" ]; then settings --user 0 delete system min_refresh_rate 2>/dev/null; else settings --user 0 put system min_refresh_rate "$OMIN" 2>/dev/null; fi
-    if [ "$OPEAK" = "-" ]; then settings --user 0 delete system peak_refresh_rate 2>/dev/null; else settings --user 0 put system peak_refresh_rate "$OPEAK" 2>/dev/null; fi
-    rm -f "$RC_PINBAK"
-    PIN_CUR=""
-    return 0
-}
-cleanup() {
-    rm -f "$RC_PID"
-    pin_restore
-    if [ -f "$SF_LOCK/pid" ] && [ "$(cat "$SF_LOCK/pid" 2>/dev/null)" = "$$" ]; then
-        rm -f "$SF_LOCK/pid"
-        rmdir "$SF_LOCK" 2>/dev/null
-    fi
-    exit 0
-}
+
+cleanup() { rm -f "$PIDF"; exit 0; }
 trap cleanup INT TERM
-RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0
-rc_load() {
-    RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0
-    [ -f "$RC_CONF" ] || return 0
-    RC_BASE=$(sed -n 's/^BASE=//p' "$RC_CONF" | tail -n 1)
-    RC_LADDER=$(sed -n 's/^LADDER=//p' "$RC_CONF" | tail -n 1)
-    RC_PERAPP=$(sed -n 's/^PERAPP=//p' "$RC_CONF" | tail -n 1)
-    RC_LOCKBOOT=$(sed -n 's/^LOCKBOOT=//p' "$RC_CONF" | tail -n 1)
-    RC_LOCKHZ=$(sed -n 's/^LOCKHZ=//p' "$RC_CONF" | tail -n 1)
-    RC_APPS=$(grep '^APP:' "$RC_CONF" | cut -d: -f2-)
-    [ "$RC_PERAPP" = "1" ] || RC_PERAPP=0
-    [ "$RC_LOCKBOOT" = "1" ] || RC_LOCKBOOT=0
-    case "$RC_LOCKHZ" in ''|*[!0-9]*) RC_LOCKHZ=0 ;; esac
-    return 0
+
+wait_boot() {
+    while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 1; done
 }
-rc_app_hz() {
-    [ -f "$RC_CONF" ] || return 1
-    H=$(sed -n "s|^APP:$1=||p" "$RC_CONF" | tail -n 1)
-    [ -n "$H" ] || return 1
-    echo "$H"
-    return 0
+
+screen_on() {
+    local s=$(dumpsys power 2>/dev/null | grep -oE "mWakefulness=[A-Za-z]+" | head -n1 | cut -d= -f2)
+    [ "$s" = "Awake" ] && echo 1 || echo 0
 }
-lockhz_active() { [ "$RC_LOCKHZ" -gt 0 ] 2>/dev/null; }
-boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
-pin_active() {
-    [ -f "$SF_PIN" ] || return 1
-    [ "$(cut -d' ' -f1 "$SF_PIN" 2>/dev/null)" = "$(boot_id)" ] || { rm -f "$SF_PIN"; return 1; }
-    return 0
+
+jnum() {
+    grep -o "\"$1\"[^0-9]*[0-9]*" "$2" 2>/dev/null | grep -o '[0-9]*$'
 }
-sf_capture() {
-    timeout -k 1 4 dumpsys -t 3 SurfaceFlinger --displays > "$RC_DISP" 2>&1 || return 1
-    awk '
-    function value(line, key, part) {
-        part=line
-        if (index(part,key "=")==0) return ""
-        sub("^.*" key "=", "", part)
-        sub(/[,} ].*$/, "", part)
-        return part
-    }
-    function mode(line, tag, id, res, hzv, grp, n, xy) {
-        id=value(line,"id"); res=value(line,"resolution")
-        hzv=value(line,"vsyncRate"); grp=value(line,"group")
-        n=split(res,xy,"x")
-        if (id !~ /^[0-9]+$/ || n!=2 || xy[1] !~ /^[0-9]+$/ || xy[2] !~ /^[0-9]+$/ ||
-            hzv !~ /^[0-9]+([.][0-9]+)?$/ || grp !~ /^[0-9]+$/ || hzv<=0) { bad=1; return }
-        printf "%s|%s|%s|%s|%s|%s\n",tag,id,xy[1],xy[2],hzv,grp
-    }
-    /^Display [0-9]+$/ { displays++; display=$2 }
-    /^[[:space:]]*connectionType=/ { internal=($0 ~ /connectionType=Internal/) }
-    /^[[:space:]]*powerMode=/ { power=tolower(value($0,"powerMode")) }
-    /^[[:space:]]*renderRate=/ { render=value($0,"renderRate") }
-    /^[[:space:]]*activeMode=/ { active++; mode($0,"A") }
-    /^[[:space:]]*\{id=/ { mode($0,"M") }
-    END {
-        if (bad || displays!=1 || active!=1 || !internal ||
-            display !~ /^[0-9]+$/ || render !~ /^[0-9]+([.][0-9]+)?$/) exit 1
-        if (power=="on") power="On"; else power="Off"
-        printf "D|%s|%s|%s\n",display,power,render
-    }
-    ' "$RC_DISP" > "$RC_SF" || return 1
-    [ -s "$RC_SF" ] || return 1
-    RC_DISPLAY=$(awk -F'|' '$1=="D"{print $2}' "$RC_SF")
-    RC_POWER=$(awk -F'|' '$1=="D"{print $3}' "$RC_SF")
-    RC_AID=$(awk -F'|' '$1=="A"{print $2}' "$RC_SF")
-    [ -n "$RC_DISPLAY" ] && [ -n "$RC_AID" ] || return 1
-    return 0
+
+jbool() {
+    grep -o "\"$1\"[^a-z]*[a-z]*" "$2" 2>/dev/null | grep -oE '(true|false)$'
 }
-sf_send() {
-    timeout -k 1 4 service call SurfaceFlinger 1035 i32 "$1" i64 "$RC_DISPLAY" >/dev/null 2>&1
+
+is_num() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac
 }
-try_lock() {
-    mkdir "$SF_LOCK" 2>/dev/null || return 1
-    printf '%s\n' "$$" > "$SF_LOCK/pid" 2>/dev/null || { rmdir "$SF_LOCK" 2>/dev/null; return 1; }
-    return 0
+
+# 星驰: 拓宽系统刷新率上下限, 防止 settings 层把档位拉回 60/120
+widen_rates() {
+    settings put system peak_refresh_rate 240.0 2>/dev/null
+    settings put system min_refresh_rate 10.0 2>/dev/null
 }
-do_unlock() {
-    [ -f "$SF_LOCK/pid" ] && [ "$(cat "$SF_LOCK/pid" 2>/dev/null)" = "$$" ] || return 0
-    rm -f "$SF_LOCK/pid"
-    rmdir "$SF_LOCK" 2>/dev/null
+
+cur_id=""
+saved_id=""
+app_sw="true"
+app_intv="1"
+last_app="__INIT__"
+cfg_mt=0
+apps_mt=0
+rates_mt=0
+
+load_cfg() {
+    [ ! -f "$CFG" ] && return
+    local v=$(jnum "globalRateId" "$CFG")
+    # 0/空 = 未设置全局锁定
+    if [ -n "$v" ] && [ "$v" != "0" ]; then saved_id="$v"; else saved_id=""; fi
+    local e=$(jbool "appSwitchEnabled" "$CFG")
+    if [ "$e" = "false" ]; then app_sw="false"; else app_sw="true"; fi
+    local i=$(jnum "appSwitchInterval" "$CFG")
+    [ -n "$i" ] && [ "$i" -ge 1 ] 2>/dev/null && app_intv="$i"
 }
-hz_to_id() {
-    awk -F'|' -v hz="$1" -v g="$RC_AGRP" '$1=="M" && int($5+0.5)==hz && $6==g {print $2; exit}' "$RC_SF"
+
+rate_line() {
+    [ ! -f "$RATES" ] && return
+    awk -F: -v id="$1" '$1==id {print; exit}' "$RATES" 2>/dev/null
 }
-active_hz() {
-    awk -F'|' '$1=="A"{print int($5+0.5); exit}' "$RC_SF"
+
+rate_type() {
+    local l=$(rate_line "$1")
+    [ -z "$l" ] && return
+    echo "$l" | awk -F: '{print $5}'
 }
-send_hz() {
-    HID=$(hz_to_id "$1")
-    [ -n "$HID" ] || return 1
-    try_lock || return 1
-    OK=1
-    sf_send "$HID" || OK=0
-    do_unlock
-    [ "$OK" = "1" ] || return 1
-    printf '%s %s\n' "$(boot_id)" "$HID" > "$SF_PIN"
-    return 0
+
+rate_res() {
+    local l=$(rate_line "$1")
+    [ -z "$l" ] && return
+    echo "$l" | awk -F: '{print $2 "x" $3}'
 }
-front_pkg() {
-    FP=$(dumpsys activity activities 2>/dev/null | grep -m1 'ResumedActivity' | sed -n 's/.* u0 \([^ /]*\)\/.*/\1/p')
-    [ -n "$FP" ] && { echo "$FP"; return 0; }
-    FP=$(dumpsys window 2>/dev/null | grep -m1 'mCurrentFocus' | sed -n 's/.* u0 \([^ /]*\)\/.*/\1/p')
-    [ -n "$FP" ] && { echo "$FP"; return 0; }
-    return 1
+
+rate_ord() {
+    local l=$(rate_line "$1")
+    [ -z "$l" ] && echo 0 && return
+    local o=$(echo "$l" | awk -F: '{print $7}')
+    [ -z "$o" ] && echo 0 || echo "$o"
 }
-screen_awake() {
-    [ "$(dumpsys power 2>/dev/null | grep -m1 'mWakefulness=' | cut -d= -f2)" = "Awake" ]
+
+native_base() {
+    local res="$1"
+    [ ! -f "$RATES" ] && echo 1 && return
+    local w="${res%x*}"
+    local h="${res#*x}"
+    [ -z "$w" ] && echo 1 && return
+    [ -z "$h" ] && echo 1 && return
+    local id=$(awk -F: -v w="$w" -v h="$h" '$2==w && $3==h && $5=="native" && $6=="1" {print $1; exit}' "$RATES" 2>/dev/null)
+    [ -z "$id" ] && echo 1 || echo "$id"
 }
-ladder_to() {
-    # 星驰式双向逐级步进: 上行依次经过 CUR..TGT 间各超频档,
-    # 下行依次降档到 TGT 之上最近一级再落目标 (避免 DDIC 跨档跳变)
-    CUR_HZ=$1; TGT=$2
-    [ "$CUR_HZ" = "$TGT" ] && return 0
-    if [ "$CUR_HZ" -lt "$TGT" ]; then
-        for L in $RC_LADDER_COMMA; do
-            case "$L" in ''|*[!0-9]*) continue ;; esac
-            [ "$L" -le "$CUR_HZ" ] && continue
-            [ "$L" -lt "$TGT" ] || continue
-            send_hz "$L" || return 1
+
+oc_range() {
+    local res="$1"
+    local from="$2"
+    local to="$3"
+    local w="${res%x*}"
+    local h="${res#*x}"
+    [ ! -f "$RATES" ] && return
+    if [ "$from" -lt "$to" ]; then
+        awk -F: -v w="$w" -v h="$h" -v f="$from" -v t="$to" '$2==w && $3==h && $5=="overclock" && $7>f && $7<=t {print $7":"$1}' "$RATES" 2>/dev/null | sort -t: -k1 -n | cut -d: -f2
+    else
+        awk -F: -v w="$w" -v h="$h" -v f="$from" -v t="$to" '$2==w && $3==h && $5=="overclock" && $7<f && $7>=t {print $7":"$1}' "$RATES" 2>/dev/null | sort -t: -k1 -rn | cut -d: -f2
+    fi
+}
+
+oc_up() {
+    local res="$1"
+    local to="$2"
+    local w="${res%x*}"
+    local h="${res#*x}"
+    [ ! -f "$RATES" ] && return
+    awk -F: -v w="$w" -v h="$h" -v t="$to" '$2==w && $3==h && $5=="overclock" && $7>0 && $7<=t {print $7":"$1}' "$RATES" 2>/dev/null | sort -t: -k1 -n | cut -d: -f2
+}
+
+oc_down() {
+    local res="$1"
+    local from="$2"
+    local w="${res%x*}"
+    local h="${res#*x}"
+    [ ! -f "$RATES" ] && return
+    awk -F: -v w="$w" -v h="$h" -v f="$from" '$2==w && $3==h && $5=="overclock" && $7>0 && $7<f {print $7":"$1}' "$RATES" 2>/dev/null | sort -t: -k1 -rn | cut -d: -f2
+}
+
+oc_step_down() {
+    local res="$1"
+    local from_ord="$2"
+    local i
+    for i in $(oc_down "$res" "$from_ord"); do
+        usleep 50000 2>/dev/null || sleep 0.05
+        service call SurfaceFlinger 1035 i32 "$i" >/dev/null 2>&1
+    done
+    usleep 50000 2>/dev/null || sleep 0.05
+    local base=$(native_base "$res")
+    is_num "$base" && service call SurfaceFlinger 1035 i32 "$base" >/dev/null 2>&1
+}
+
+has_apps() {
+    [ ! -f "$APPS" ] && echo 0 && return
+    local c=$(grep -c '=' "$APPS" 2>/dev/null)
+    [ "$c" -gt 0 ] && echo 1 || echo 0
+}
+
+# 星驰切换链: 原生档直接切; 超频档经原生基准逐级上行 / 逐级下行回原生
+apply() {
+    local tid="$1"
+    is_num "$tid" || return 1
+    [ "$tid" = "$cur_id" ] && return 0
+
+    widen_rates
+
+    local tt=$(rate_type "$tid")
+    local tr=$(rate_res "$tid")
+    local to=$(rate_ord "$tid")
+    local ct=$(rate_type "$cur_id")
+    local cr=$(rate_res "$cur_id")
+    local co=$(rate_ord "$cur_id")
+
+    if [ -z "$tt" ] || [ "$tt" = "native" ] || [ "$tt" = "unknown" ]; then
+        if [ "$ct" = "overclock" ] && [ -n "$cur_id" ]; then
+            oc_step_down "$cr" "$co"
+        fi
+        usleep 50000 2>/dev/null || sleep 0.05
+        service call SurfaceFlinger 1035 i32 "$tid" >/dev/null 2>&1
+        cur_id="$tid"
+        return 0
+    fi
+
+    if [ "$tt" = "overclock" ]; then
+        local tn=$(native_base "$tr")
+        if [ "$ct" = "overclock" ] && [ "$cr" = "$tr" ] && [ -n "$cur_id" ]; then
+            local i
+            for i in $(oc_range "$tr" "$co" "$to"); do
+                usleep 50000 2>/dev/null || sleep 0.05
+                service call SurfaceFlinger 1035 i32 "$i" >/dev/null 2>&1
+            done
+        else
+            if [ "$ct" = "overclock" ] && [ -n "$cur_id" ]; then
+                oc_step_down "$cr" "$co"
+            fi
             usleep 50000 2>/dev/null || sleep 0.05
-        done
-    else
-        for L in $RC_LADDER_DESC; do
-            case "$L" in ''|*[!0-9]*) continue ;; esac
-            [ "$L" -ge "$CUR_HZ" ] && continue
-            [ "$L" -gt "$TGT" ] || continue
-            send_hz "$L" || return 1
-            usleep 50000 2>/dev/null || sleep 0.05
-        done
-    fi
-    send_hz "$TGT" || return 1
-    return 0
-}
-rc_load
-[ -n "$RC_BASE" ] || { rclog "无基准档位配置, 退出"; exit 0; }
-[ "$RC_PERAPP" = "1" ] || [ "$RC_LOCKBOOT" = "1" ] || lockhz_active || { rclog "按应用切换/开机锁定/全局锁定均未开启, 退出"; exit 0; }
-printf '%s\n' "$$" > "$RC_PID"
-rclog "服务启动 (base=${RC_BASE}Hz ladder=${RC_LADDER:-无} perapp=$RC_PERAPP lockboot=$RC_LOCKBOOT lockhz=${RC_LOCKHZ}Hz)"
-AWAKE=1
-LAST_PKG=""; LAST_TGT=""; SENT=0
-while :; do
-    sleep 1.2
-    rc_load
-    if [ "$RC_PERAPP" != "1" ] && [ "$RC_LOCKBOOT" != "1" ] && ! lockhz_active && ! pin_active; then
-        rclog "功能均已关闭, 服务退出"
-        cleanup
-    fi
-    [ -n "$RC_BASE" ] || continue
-    if screen_awake; then
-        JUST_AWAKE=0
-        [ "$AWAKE" = "0" ] && JUST_AWAKE=1
-        AWAKE=1
-    else
-        AWAKE=0
-        sleep 1.8
-        continue
-    fi
-    sf_capture || continue
-    [ "$RC_POWER" = "On" ] || continue
-    RC_AGRP=$(awk -F'|' '$1=="A"{print $6}' "$RC_SF")
-    RC_LADDER_COMMA=$(echo "$RC_LADDER" | tr ',' ' ')
-    RC_LADDER_DESC=$(echo "$RC_LADDER_COMMA" | tr ' ' '\n' | sort -rn | tr '\n' ' ')
-    CUR_HZ=$(active_hz)
-    [ -n "$CUR_HZ" ] || continue
-    PINNED=0
-    pin_active && PINNED=1
-    if [ "$PINNED" != "1" ]; then
-        # 未钉住 (开机初始/手动交还后): 仅锁定类功能需要拉到目标档
-        lockhz_active || { [ "$RC_LOCKBOOT" = "1" ] || continue; }
-        TGT="$RC_BASE"
-        lockhz_active && TGT="$RC_LOCKHZ"
-        pin_settings "$TGT"
-        send_hz "$TGT" || continue
-        rclog "锁定档位 ${TGT}Hz (开机/未锁定状态)"
-        continue
-    fi
-    # 已钉住: 目标档 = 全局锁定 > 按应用 > 基准
-    if lockhz_active; then
-        TGT="$RC_LOCKHZ"; PKG="lock"
-    else
-        TGT="$RC_BASE"; PKG="-"
-        if [ "$RC_PERAPP" = "1" ]; then
-            PKG=$(front_pkg || echo "-")
-            APH=$(rc_app_hz "$PKG" 2>/dev/null)
-            [ -n "$APH" ] && TGT="$APH"
+            service call SurfaceFlinger 1035 i32 "$tn" >/dev/null 2>&1
+            local i
+            for i in $(oc_up "$tr" "$to"); do
+                usleep 50000 2>/dev/null || sleep 0.05
+                service call SurfaceFlinger 1035 i32 "$i" >/dev/null 2>&1
+            done
         fi
     fi
-    # 目标/前台变化或刚亮屏: 重置重发限流
-    if [ "$TGT" != "$LAST_TGT" ] || [ "$PKG" != "$LAST_PKG" ] || [ "$JUST_AWAKE" = "1" ]; then
-        SENT=0
-        [ "$JUST_AWAKE" = "1" ] && pin_settings "$TGT"
+
+    cur_id="$tid"
+    return 0
+}
+
+app_rate() {
+    local pkg="$1"
+    [ -z "$pkg" ] && return
+    [ ! -f "$APPS" ] && return
+    awk -F= -v p="$pkg" '$1==p {gsub(/[[:space:]]+/, "", $2); print $2; exit}' "$APPS" 2>/dev/null
+}
+
+focus_app() {
+    dumpsys activity activities 2>/dev/null | grep "topResumedActivity=" | tail -n 1 | cut -d '{' -f2 | cut -d '/' -f1 | cut -d ' ' -f3
+}
+
+check_files() {
+    local chg=0
+    if [ -f "$CFG" ]; then
+        local mt=$(stat -c %Y "$CFG" 2>/dev/null)
+        if [ "$mt" != "$cfg_mt" ]; then
+            load_cfg
+            cfg_mt="$mt"
+            chg=1
+            cur_id=""
+        fi
     fi
-    if [ "$CUR_HZ" = "$TGT" ]; then
-        SENT=0
-        LAST_TGT=$TGT; LAST_PKG=$PKG
+    if [ -f "$APPS" ]; then
+        local mt=$(stat -c %Y "$APPS" 2>/dev/null)
+        [ "$mt" != "$apps_mt" ] && { apps_mt="$mt"; chg=1; }
+    fi
+    if [ -f "$RATES" ]; then
+        local mt=$(stat -c %Y "$RATES" 2>/dev/null)
+        [ "$mt" != "$rates_mt" ] && { rates_mt="$mt"; chg=1; }
+    fi
+    return 0
+}
+
+on_wake() {
+    if [ -z "$saved_id" ]; then
+        cur_id=""
+        last_app="__WAKEUP__"
+        return
+    fi
+
+    local tt=$(rate_type "$saved_id")
+
+    if [ -z "$tt" ] || [ "$tt" = "native" ]; then
+        widen_rates
+        service call SurfaceFlinger 1035 i32 "$saved_id" >/dev/null 2>&1
+        cur_id="$saved_id"
+        last_app="__WAKEUP__"
+        return
+    fi
+
+    last_app="__WAKEUP__"
+
+    widen_rates
+
+    local tr=$(rate_res "$saved_id")
+    local to=$(rate_ord "$saved_id")
+    local base=$(native_base "$tr")
+
+    usleep 50000 2>/dev/null || sleep 0.05
+    service call SurfaceFlinger 1035 i32 "$base" >/dev/null 2>&1
+
+    local i
+    for i in $(oc_up "$tr" "$to"); do
+        usleep 50000 2>/dev/null || sleep 0.05
+        service call SurfaceFlinger 1035 i32 "$i" >/dev/null 2>&1
+    done
+
+    cur_id="$saved_id"
+}
+
+load_cfg
+rclog "守护启动 (global=${saved_id:-无} appsw=$app_sw intv=$app_intv)"
+wait_boot
+
+[ -f "$CFG" ] && cfg_mt=$(stat -c %Y "$CFG" 2>/dev/null)
+[ -f "$APPS" ] && apps_mt=$(stat -c %Y "$APPS" 2>/dev/null)
+[ -f "$RATES" ] && rates_mt=$(stat -c %Y "$RATES" 2>/dev/null)
+
+[ -n "$saved_id" ] && apply "$saved_id"
+
+last_scr=$(screen_on)
+
+while true; do
+    scr=$(screen_on)
+
+    [ "$scr" = "1" ] && [ "$last_scr" = "0" ] && on_wake
+    last_scr="$scr"
+
+    if [ "$scr" = "0" ]; then
+        sleep 1
         continue
     fi
-    # 同一目标最多重发 3 次, 防止与系统调频无限拉锯 (60/120 反复跳变)
-    if [ "$SENT" -ge 3 ]; then
-        [ "$SENT" = "3" ] && rclog "系统持续改写档位, 暂停重发等待变化 (目标 ${TGT}Hz 当前 ${CUR_HZ}Hz)" && SENT=4
-        LAST_TGT=$TGT; LAST_PKG=$PKG
-        continue
+
+    check_files
+
+    # 配置全空 (无全局锁定且按应用关闭/无规则): 退出释放
+    if [ -z "$saved_id" ] && { [ "$app_sw" != "true" ] || [ "$(has_apps)" != "1" ]; }; then
+        rclog "全局锁定未设置且按应用未启用, 守护退出"
+        cleanup
     fi
-    pin_settings "$TGT"
-    ENF_OK=0
-    # 目标变化/刚亮屏时走星驰式双向阶梯, 其余重发直接落档
-    if [ -n "$RC_LADDER_COMMA" ] && { [ "$TGT" != "$LAST_TGT" ] || [ "$JUST_AWAKE" = "1" ]; }; then
-        ladder_to "$CUR_HZ" "$TGT" && ENF_OK=1
+
+    if [ "$app_sw" = "true" ] && [ "$(has_apps)" = "1" ]; then
+        fapp=$(focus_app)
+        if [ -n "$fapp" ] && [ "$fapp" != "$last_app" ]; then
+            last_app="$fapp"
+            ar=$(app_rate "$fapp")
+            if [ -n "$ar" ]; then
+                apply "$ar"
+            elif [ -n "$saved_id" ]; then
+                apply "$saved_id"
+            fi
+        fi
+        sleep "$app_intv"
     else
-        send_hz "$TGT" && ENF_OK=1
+        sleep 2
     fi
-    SENT=$((SENT+1))
-    if [ "$ENF_OK" = "1" ]; then
-        rclog "切换 ${CUR_HZ} -> ${TGT}Hz (${PKG})"
-    else
-        rclog "切换 ${TGT}Hz 失败"
-    fi
-    LAST_TGT=$TGT; LAST_PKG=$PKG
 done

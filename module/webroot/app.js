@@ -5,12 +5,10 @@ const $ = id => document.getElementById(id);
 const COMMAND = 'sh /data/adb/modules/dtbo_oc/bin/webuictl.sh';
 let state = null;
 let busy = false;
-let rcBusy = false;
+let rmBusy = false;
 let apBusy = false;
 let connected = false;
 let dirty = false;
-let rcSel = { base: null, ladder: [] };
-let rcDirty = false;
 let sel = { hz: null, battery: null, oc_mode: null, ltpo_off: null };
 
 const BATT_LABELS = {
@@ -26,6 +24,12 @@ const BATT_LABELS = {
 function notify(message, isError = false) {
   const box = $(isError ? 'error' : 'notice');
   $(isError ? 'notice' : 'error').hidden = true;
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+function rmNotify(message) {
+  const box = $('rm-notice');
   box.textContent = message;
   box.hidden = !message;
 }
@@ -88,28 +92,15 @@ function drawLicense() {
 
 function controls() {
   const ready = connected && state && !busy;
-  const sw = switchModeActive();
   const blocked = licBlocked();
   document.body.classList.toggle('busy', busy);
   $('refresh').disabled = busy;
-  if (sw) {
-    const hasChanges = rcDirty || dirty;
-    $('apply').disabled = !ready || busy || !hasChanges || (dirty && blocked);
-    $('apply-label').textContent = busy ? '正在处理…'
-      : dirty && blocked ? '需先完成QQ群验证'
-        : hasChanges ? '保存切换配置' : '已同步';
-    const baseT = rcSel.base ? `基准 ${rcSel.base}Hz` : '未设基准';
-    const ladT = rcSel.ladder.length ? `升挡 ${rcSel.ladder.join('→')}Hz` : '无升挡序列';
-    $('selection').textContent = `${baseT} · ${ladT}${dirty ? ' · 配置待保存' : ''}`;
-  } else {
-    $('apply').disabled = !ready || blocked;
-    $('apply-label').textContent = busy ? '正在处理…' : blocked ? '需先完成QQ群验证' : '保存并应用';
-    const hzText = sel.hz === 0 ? '不超频' : sel.hz ? `${sel.hz}Hz` : '—';
-    const modeText = sel.oc_mode === 'ko' ? 'KO 挂载' : sel.oc_mode === 'dtbo' ? 'DTBO 补丁' : '—';
-    $('selection').textContent = `${hzText} · ${modeText}`;
-  }
+  $('apply').disabled = !ready || blocked;
+  $('apply-label').textContent = busy ? '正在处理…' : blocked ? '需先完成QQ群验证' : '保存并应用';
+  const hzText = sel.hz === 0 ? '不超频' : sel.hz ? `${sel.hz}Hz` : '—';
+  const modeText = sel.oc_mode === 'ko' ? 'KO 挂载' : sel.oc_mode === 'dtbo' ? 'DTBO 补丁' : '—';
+  $('selection').textContent = `${hzText} · ${modeText}`;
   $('restore').disabled = !ready || busy;
-  syncRcControls();
 }
 
 function radioButton(className, label, checked, onClick, disabled = false) {
@@ -131,320 +122,32 @@ function span(className, text) {
   return element;
 }
 
-function switchModeActive() {
-  const sfOk = state?.sf?.ok && Array.isArray(state.sf.modes);
-  if (!sfOk || !state?.oc_capable) return false;
-  const maxrate = Number(state.maxrate) || 120;
-  return state.sf.modes.some(m => m.hz > maxrate);
-}
-
-async function ratectlCommand(args, okMsg) {
-  if (rcBusy || busy) return;
-  rcBusy = true;
-  syncRcControls();
-  try {
-    const result = await command(`ratectl ${args}`);
-    if (result && result.ratectl) {
-      state.ratectl = result.ratectl;
-      if (!rcDirty) {
-        rcSel = {
-          base: result.ratectl.base ? Number(result.ratectl.base) : null,
-          ladder: Array.isArray(result.ratectl.ladder) ? [...result.ratectl.ladder] : []
-        };
-      }
-      drawRates();
-      drawPerapp();
-      controls();
-    } else {
-      render(await command('status'));
-    }
-    notify(okMsg || result.message || '已保存。');
-  } catch (error) {
-    notify(error.message, true);
-    drawPerapp();
-  } finally {
-    rcBusy = false;
-    syncRcControls();
-    controls();
-  }
-}
-
-function syncRcControls() {
-  const off = rcBusy || busy;
-  ['perapp-toggle', 'lockboot-toggle', 'lockhz-select', 'lock-btn'].forEach(id => { $(id).disabled = off; });
-  document.querySelectorAll('#app-rows select, #app-rows button').forEach(el => { el.disabled = off; });
-}
-
-async function switchHz(hz) {
-  if (busy) return;
-  busy = true;
-  controls();
-  try {
-    const result = await command(`switch hz=${hz}`, 30000);
-    notify(result.message || `已切换至 ${hz}Hz。`);
-    render(await command('status'));
-  } catch (error) {
-    notify(error.message, true);
-  } finally {
-    busy = false;
-    controls();
-  }
-}
-
-async function releaseRate() {
-  if (busy) return;
-  busy = true;
-  controls();
-  try {
-    const result = await command('release', 30000);
-    notify(result.message || '已交还系统自动调频。');
-    render(await command('status'));
-  } catch (error) {
-    notify(error.message, true);
-  } finally {
-    busy = false;
-    controls();
-  }
-}
-
-function drawRatesSwitch(fragment, rc) {
-  const maxrate = Number(state.maxrate) || 120;
-  const activeHz = state.sf.active.hz;
-  const modes = [];
-  state.sf.modes.forEach(m => {
-    if (!modes.includes(m.hz)) modes.push(m.hz);
-  });
-  modes.sort((a, b) => a - b);
-  const ladder = rcSel.ladder;
-  const baseHz = rcSel.base;
-  const pinned = !!state.sf.pinned;
-  const redraw = () => { drawRates(); controls(); };
-  modes.forEach(hz => {
-    const oc = hz > maxrate;
-    const inLadder = ladder.includes(hz);
-    const card = document.createElement('div');
-    card.className = 'rate-card' + (oc ? ' oc' : ' stock') + (activeHz === hz ? ' cur' : '') + (baseHz === hz ? ' base' : '');
-    const head = document.createElement('button');
-    head.type = 'button';
-    head.className = 'rc-head';
-    head.setAttribute('aria-label', `切换到 ${hz}Hz`);
-    head.addEventListener('click', () => switchHz(hz));
-    head.append(span('rate-number', String(hz)), span('rate-unit', 'Hz'));
-    const tags = span('rc-tags', '');
-    tags.append(span('rc-tag', oc ? '超频' : '原生'));
-    if (activeHz === hz) tags.append(span('rc-tag cur', '当前'));
-    if (baseHz === hz) tags.append(span('rc-tag base', '基准'));
-    head.append(tags);
-    card.append(head);
-    const actions = document.createElement('div');
-    actions.className = 'rc-actions';
-    const baseBtn = document.createElement('button');
-    baseBtn.type = 'button';
-    baseBtn.className = 'rc-btn' + (baseHz === hz ? ' on' : '');
-    baseBtn.textContent = baseHz === hz ? '✓ 基准' : '设为基准';
-    baseBtn.addEventListener('click', () => {
-      rcSel.base = hz; rcDirty = true; redraw();
-    });
-    actions.append(baseBtn);
-    if (oc) {
-      const ocBtn = document.createElement('button');
-      ocBtn.type = 'button';
-      ocBtn.className = 'rc-btn' + (inLadder ? ' on' : '');
-      ocBtn.textContent = '超频';
-      ocBtn.addEventListener('click', () => {
-        if (inLadder) rcSel.ladder = ladder.filter(v => v !== hz);
-        else rcSel.ladder = [...ladder, hz].sort((a, b) => a - b);
-        rcDirty = true; redraw();
-      });
-      actions.append(ocBtn);
-      if (inLadder) {
-        const order = ladder.indexOf(hz) + 1;
-        const orderWrap = span('rc-order', '');
-        orderWrap.append(document.createTextNode('顺序'));
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.min = '1';
-        input.max = '9';
-        input.value = String(order);
-        input.setAttribute('aria-label', `${hz}Hz 切换顺序`);
-        input.addEventListener('change', () => {
-          let n = parseInt(input.value, 10);
-          if (!Number.isFinite(n) || n < 1) n = 1;
-          if (n > ladder.length) n = ladder.length;
-          const rest = ladder.filter(v => v !== hz);
-          rcSel.ladder = [...rest.slice(0, n - 1), hz, ...rest.slice(n - 1)];
-          rcDirty = true; redraw();
-        });
-        orderWrap.append(input);
-        actions.append(orderWrap);
-      }
-    }
-    card.append(actions);
-    fragment.append(card);
-  });
-  const tools = $('rate-tools');
-  tools.hidden = false;
-  const lockhz = Number(rc?.lockhz) || 0;
-  const gears = perappRateOptions(rc);
-  const lockSel = $('lockhz-select');
-  const keepSel = lockSel.value;
-  lockSel.replaceChildren(...gears.map(v => {
-    const o = document.createElement('option');
-    o.value = String(v);
-    o.textContent = `${v}Hz`;
-    return o;
-  }));
-  if (keepSel && gears.includes(Number(keepSel))) lockSel.value = keepSel;
-  else lockSel.value = String(lockhz || rcSel.base || gears[gears.length - 1] || '');
-  const lockBtn = $('lock-btn');
-  lockBtn.textContent = lockhz ? `解锁 (当前 ${lockhz}Hz)` : pinned ? '解锁 (交还系统)' : '全局锁定';
-  lockBtn.classList.toggle('on', !!lockhz || pinned);
-  lockBtn.onclick = () => {
-    if (lockhz) { ratectlCommand('save lockhz=0', '已解除全局锁定。'); return; }
-    if (pinned) { releaseRate(); return; }
-    const hz = Number(lockSel.value);
-    if (!hz) { notify('请选择锁定档位。', true); return; }
-    ratectlCommand(`save lockhz=${hz}`, `已全局锁定 ${hz}Hz。`);
-  };
-  const lockState = $('lock-state');
-  lockState.textContent = lockhz
-    ? `全局锁定 ${lockhz}Hz`
-    : pinned ? `已锁定${rcSel.base ? ` · 基准 ${rcSel.base}Hz` : ''}` : '自动调频';
-  $('rate-heading').textContent = '切换档位';
-  $('rates-caption').textContent = `共 ${modes.length} 档${rcSel.base ? ` · 基准 ${rcSel.base}Hz` : ''}${rcDirty ? ' · 待保存' : ''}`;
-}
-
 function drawRates() {
   const fragment = document.createDocumentFragment();
   const choices = state?.choices || [];
-  const sfOk = state?.sf?.ok && Array.isArray(state.sf.modes);
-  const activeHz = sfOk ? state.sf.active.hz : null;
-  const stockHz = [];
-  if (sfOk) {
-    state.sf.modes.forEach(m => {
-      if (m.hz < 130 && !stockHz.includes(m.hz)) stockHz.push(m.hz);
-    });
-    stockHz.sort((a, b) => a - b);
-  }
-  if (switchModeActive()) {
-    drawRatesSwitch(fragment, state?.ratectl);
-    $('rates').classList.add('two-col');
-    $('rates').replaceChildren(fragment);
-    return;
-  }
-  $('rates').classList.remove('two-col');
-  $('rate-tools').hidden = true;
-  $('rate-heading').textContent = '超频档位';
-  if (!state?.oc_capable) {
+  if (!state?.oc_capable || !choices.length) {
     sel.hz = 0;
     $('rates-caption').textContent = '本机型不支持超频';
-    const frag = document.createDocumentFragment();
-    stockHz.forEach(hz => {
-      const b = radioButton('rate-choice stock', `${hz}Hz 原厂`, activeHz === hz, () => {}, true);
-      b.append(span('rate-number', String(hz)), span('rate-unit', 'Hz'), span('oc-label', '原厂'));
-      frag.append(b);
-    });
-    const off = radioButton('rate-choice', '不超频', true, () => {});
+    const off = radioButton('rate-choice wide', '不超频', true, () => {});
     off.append(span('rate-number', '关'), span('rate-unit', 'OC'));
-    frag.append(off);
-    $('rates').replaceChildren(frag);
+    $('rates').replaceChildren(off);
     return;
   }
-  stockHz.forEach(hz => {
-    const checked = activeHz === hz;
-    const b = radioButton('rate-choice stock', `${hz}Hz 原厂`, checked, () => {}, true);
-    b.append(span('rate-number', String(hz)), span('rate-unit', 'Hz'), span('oc-label', '原厂'));
-    fragment.append(b);
-  });
   choices.forEach(c => {
-    const checked = sel.hz === c || (activeHz === c && sel.hz === null);
-    const button = radioButton('rate-choice overclock', `${c}Hz 超频`, checked, () => {
+    const checked = sel.hz === c;
+    const b = radioButton('rate-choice overclock', `${c}Hz 超频档`, checked, () => {
       sel.hz = c; dirty = true; drawRates(); controls();
     });
-    button.append(span('rate-number', String(c)), span('rate-unit', 'Hz'), span('oc-label', '超频'));
-    fragment.append(button);
+    b.append(span('rate-number', String(c)), span('rate-unit', 'Hz'));
+    fragment.append(b);
   });
-  const off = radioButton('rate-choice', '不超频', sel.hz === 0, () => {
+  const off = radioButton('rate-choice stock', '不超频', sel.hz === 0, () => {
     sel.hz = 0; dirty = true; drawRates(); controls();
   });
   off.append(span('rate-number', '关'), span('rate-unit', 'OC'));
   fragment.append(off);
   $('rates').replaceChildren(fragment);
-  $('rates-caption').textContent = `原厂 ${stockHz.length} 档 + 超频 ${choices.length} 档`;
-}
-
-function perappRateOptions(rc) {
-  const maxrate = Number(state.maxrate) || 120;
-  const opts = [];
-  if (state?.sf?.ok && Array.isArray(state.sf.modes)) {
-    state.sf.modes.forEach(m => { if (!opts.includes(m.hz)) opts.push(m.hz); });
-    opts.sort((a, b) => a - b);
-  } else {
-    (Array.isArray(rc?.ladder) ? rc.ladder : []).forEach(v => { if (!opts.includes(v)) opts.push(v); });
-    if (rc?.base && !opts.includes(Number(rc.base))) opts.push(Number(rc.base));
-    opts.sort((a, b) => a - b);
-  }
-  return opts;
-}
-
-function drawPerapp() {
-  const section = $('perapp-section');
-  if (!switchModeActive()) {
-    section.hidden = true;
-    return;
-  }
-  section.hidden = false;
-  const rc = state?.ratectl || {};
-  const ladder = Array.isArray(rc.ladder) ? rc.ladder : [];
-  const baseHz = Number(rc.base) || null;
-  $('perapp-toggle').checked = rc.perapp === 1;
-  $('lockboot-toggle').checked = rc.lockboot === 1;
-  const appMap = rc.apps && typeof rc.apps === 'object' ? rc.apps : {};
-  const pkgs = Object.keys(appMap);
-  const opts = perappRateOptions(rc);
-  const rows = document.createDocumentFragment();
-  pkgs.forEach(pkg => {
-    const hz = Number(appMap[pkg]) || baseHz || opts[0] || 120;
-    const row = document.createElement('div');
-    row.className = 'app-row';
-    const name = span('app-name', appNames[pkg] || pkg);
-    if (appNames[pkg] && appNames[pkg] !== pkg) name.append(span('app-pkg-sm', pkg));
-    row.append(name);
-    const select = document.createElement('select');
-    select.className = 'app-hz';
-    select.setAttribute('aria-label', `${pkg} 档位`);
-    opts.forEach(v => {
-      const o = document.createElement('option');
-      o.value = String(v);
-      o.textContent = `${v}Hz`;
-      if (v === hz) o.selected = true;
-      select.append(o);
-    });
-    select.addEventListener('change', () => {
-      ratectlCommand(`app set ${pkg} ${select.value}`, `已设置 ${pkg} -> ${select.value}Hz。`);
-    });
-    row.append(select);
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'rc-btn del';
-    del.textContent = '移除';
-    del.addEventListener('click', () => {
-      ratectlCommand(`app del ${pkg}`, `已移除 ${pkg}。`);
-    });
-    row.append(del);
-    rows.append(row);
-  });
-  if (!pkgs.length) {
-    const empty = span('app-empty', '尚未配置应用; 点「+ 添加应用」选择应用并设定其最高档位。');
-    rows.append(empty);
-  }
-  $('app-rows').replaceChildren(rows);
-  const cap = [];
-  cap.push(rc.perapp === 1 ? '已开启' : '未开启');
-  if (baseHz) cap.push(`基准 ${baseHz}Hz`);
-  if (rc.daemon === 1) cap.push('服务运行中');
-  $('perapp-caption').textContent = cap.join(' · ');
-  syncRcControls();
+  $('rates-caption').textContent = `可超频档 ${choices.length} 个 · 重启后生效`;
 }
 
 function drawBatts() {
@@ -478,7 +181,7 @@ function drawModes() {
     dtbo.append(span('m-title', 'DTBO 补丁'), span('m-detail', '生成超频 DTBO 并刷入, 重启后生效'));
     fragment.append(dtbo);
   }
-  if (koAvail || koOnly) {
+  {
     const koWarn = state?.ko?.vermatch === 0;
     const ko = radioButton('mode-choice ko', 'KO 内核挂载', sel.oc_mode === 'ko', () => {
       sel.oc_mode = 'ko'; dirty = true;
@@ -487,34 +190,26 @@ function drawModes() {
     });
     ko.append(span('m-title', 'KO 内核挂载'), span('m-detail', koWarn
       ? 'KO 与当前内核版本不匹配, OTA 后需等待模块更新'
-      : state?.ko?.builtin
-        ? '开机加载内置内核模块, 不动 DTBO, 重启生效'
-        : '开机加载内核模块, 不动 DTBO, 重启生效'));
+      : !koAvail
+        ? '未找到 KO 文件, 侧载到 /data/adb/dtbo_oc/ko/ 后重启生效'
+        : state?.ko?.builtin
+          ? '开机加载内置内核模块, 不动 DTBO, 重启生效'
+          : '开机加载内核模块, 不动 DTBO, 重启生效'));
     fragment.append(ko);
   }
   $('modes').replaceChildren(fragment);
   $('mode-caption').textContent = sel.oc_mode === 'ko' ? 'KO 挂载' : 'DTBO 补丁';
 }
 
-function render(data, applied = false) {
+function render(data) {
   state = data;
   connected = true;
-  if (applied || !dirty) {
-    sel = { hz: data.hz, battery: data.battery, oc_mode: data.oc_mode, ltpo_off: data.ltpo_off };
-    dirty = false;
-  }
+  sel = { hz: data.hz, battery: data.battery, oc_mode: data.oc_mode, ltpo_off: data.ltpo_off };
+  dirty = false;
   if (sel.hz > 0 && Array.isArray(data.choices) && data.choices.length && !data.choices.includes(sel.hz)) {
     notify(`已保存的 ${sel.hz}Hz 档位因稳定性问题已移除, 请重新选择档位。`);
     sel.hz = 0;
     dirty = true;
-  }
-  if (applied || !rcDirty) {
-    const rc = data.ratectl || {};
-    rcSel = {
-      base: rc.base ? Number(rc.base) : null,
-      ladder: Array.isArray(rc.ladder) ? [...rc.ladder] : []
-    };
-    rcDirty = false;
   }
   $('connection').textContent = '已连接';
   $('connection').className = 'badge online';
@@ -527,24 +222,22 @@ function render(data, applied = false) {
   if (data.oc_mode === 'ko') {
     $('current-mode').textContent = 'KO 挂载';
     if (data.ko?.vermatch === 0) {
-      $('current-detail').textContent = 'KO 与当前内核不匹配, 已拒绝加载 (等待模块更新)';
+      $('current-detail').textContent = 'KO 与当前内核不匹配, 已拒绝加载';
     } else if (data.ko?.loaded) {
       $('current-detail').textContent = data.ko?.installed ? '已挂载并启用' : '已挂载 (状态待确认)';
     } else if (data.ko?.available) {
       $('current-detail').textContent = '待加载 (保存后重启生效)';
     } else {
-      $('current-detail').textContent = '未安装';
+      $('current-detail').textContent = '未找到 KO 文件';
     }
   } else {
     $('current-mode').textContent = 'DTBO 补丁';
     $('current-detail').textContent = data.dtbo_patched ? 'DTBO: 已修改' : 'DTBO: 原厂';
   }
   $('ltpo-off').checked = data.ltpo_off === 1;
-  $('fps-show').checked = data.fps_show === 1;
   if (data.version) $('ver').textContent = data.version;
   drawLicense();
   drawRates();
-  drawPerapp();
   drawBatts();
   drawModes();
   controls();
@@ -572,48 +265,18 @@ async function refresh(manual) {
 
 async function apply() {
   if (busy || !connected || !state) return;
-  const sw = switchModeActive();
-  if (!sw && licBlocked()) {
+  if (licBlocked()) {
     notify('请先完成QQ群验证: 在上方输入QQ号并点击验证。', true);
     return;
   }
-  if (sw && !rcDirty && !dirty) return;
   busy = true;
   controls();
-  if (sw) {
-    notify(rcDirty ? '正在保存切换配置…' : '正在保存配置…');
-    try {
-      if (rcDirty) {
-        const parts = [];
-        if (rcSel.base) parts.push(`base=${rcSel.base}`);
-        if (rcSel.ladder.length) parts.push(`ladder=${rcSel.ladder.join(',')}`);
-        if (parts.length) await command(`ratectl save ${parts.join(' ')}`, 30000);
-        rcDirty = false;
-      }
-      if (dirty) {
-        if (sel.oc_mode === 'ko' && sel.battery !== 0) sel.battery = 0;
-        await command(`save hz=${sel.hz} battery=${sel.battery} oc_mode=${sel.oc_mode} ltpo_off=${sel.ltpo_off ? 1 : 0}`);
-        await command('apply', 120000);
-        dirty = false;
-      }
-      notify('切换配置已保存。');
-      render(await command('status'));
-    } catch (error) {
-      notify(error.message, true);
-      try { render(await command('status')); } catch { connected = false; }
-    } finally {
-      busy = false;
-      controls();
-    }
-    return;
-  }
   notify('正在保存配置并应用… (DTBO 方案包含解包/打包/刷入, 请稍候)');
   try {
     if (sel.oc_mode === 'ko' && sel.battery !== 0) sel.battery = 0;
     await command(`save hz=${sel.hz} battery=${sel.battery} oc_mode=${sel.oc_mode} ltpo_off=${sel.ltpo_off ? 1 : 0}`);
     const result = await command('apply', 120000);
     notify(result.message || '已应用, 重启后生效。');
-    dirty = false;
     render(await command('status'));
   } catch (error) {
     notify(error.message, true);
@@ -632,7 +295,6 @@ async function restore() {
   try {
     const result = await command('restore', 90000);
     notify(result.message || '已恢复原厂。');
-    dirty = false;
     render(await command('status'));
   } catch (error) {
     notify(error.message, true);
@@ -690,32 +352,286 @@ $('ltpo-off').addEventListener('change', () => {
   dirty = true;
   controls();
 });
-$('fps-show').addEventListener('change', async () => {
-  const want = $('fps-show').checked;
-  const prev = state?.fps_show === 1;
-  if (want === prev) return;
-  $('fps-show').disabled = true;
-  try {
-    const r = await command(`fps ${want ? 'on' : 'off'}`, 15000);
-    if (state) state.fps_show = r.fps_show === 1 ? 1 : 0;
-    notify(r.fps_show === 1 ? '帧率显示已开启。' : '帧率显示已关闭。');
-  } catch (error) {
-    $('fps-show').checked = prev;
-    notify(error.message, true);
-  } finally {
-    $('fps-show').disabled = false;
-  }
+$('refresh').addEventListener('click', () => refresh(true));
+$('apply').addEventListener('click', apply);
+$('restore').addEventListener('click', restore);
+$('verify-btn').addEventListener('click', () => verify());
+$('verify-auto-btn').addEventListener('click', () => verify(true));
+$('qq-input').addEventListener('keydown', event => {
+  if (event.key === 'Enter') verify();
 });
-$('perapp-toggle').addEventListener('change', () => {
-  ratectlCommand(`save perapp=${$('perapp-toggle').checked ? 1 : 0}`,
-    $('perapp-toggle').checked ? '按应用自动切换已开启。' : '按应用自动切换已关闭。');
-});
-$('lockboot-toggle').addEventListener('change', () => {
-  ratectlCommand(`save lockboot=${$('lockboot-toggle').checked ? 1 : 0}`,
-    $('lockboot-toggle').checked ? '开机自动锁定已开启。' : '开机自动锁定已关闭。');
-});
-let apTimer = 0;
+
+// ================= 刷新率管理 (星驰引擎式) =================
+// 数据: rm = {ready, globalRateId, appSwitchEnabled, appSwitchInterval, daemon, apps:{pkg:id}, rates:[{id,w,h,fps,type,base,ord}]}
+let rm = null;
+let rmEdit = null;      // 档位标注编辑副本 (rates 数组)
+let rmDirty = false;
 const appNames = {};
+
+function rmRates() { return rmDirty && rmEdit ? rmEdit : (rm?.rates || []); }
+
+function rmSyncBusy() {
+  const off = rmBusy;
+  ['rm-scan', 'rm-unlock', 'rm-stop', 'rm-app-add', 'rm-rates-save'].forEach(id => { $(id).disabled = off; });
+  $('rm-appsw').disabled = off;
+  $('rm-intv').disabled = off;
+  document.querySelectorAll('#rm-app-rows select, #rm-app-rows button, #rm-rates-list button, #rm-rates-list input').forEach(el => { el.disabled = off; });
+}
+
+async function rmAction(args, okMsg, timeoutMs = 60000) {
+  if (rmBusy) return;
+  rmBusy = true;
+  rmSyncBusy();
+  try {
+    const result = await command(`ratectl ${args}`, timeoutMs);
+    if (result.rm) {
+      rm = result.rm;
+      if (!rmDirty) rmEdit = null;
+      rmDraw();
+    }
+    rmNotify(okMsg || result.message || '已保存。');
+  } catch (error) {
+    rmNotify(error.message, true);
+  } finally {
+    rmBusy = false;
+    rmSyncBusy();
+  }
+}
+
+function rmLoad() {
+  rmNotify('');
+  rmAction('status', '', 30000);
+}
+
+function rmScan() {
+  rmAction('scan', '档位扫描完成。', 90000);
+}
+
+function rmToggleGlobal(id) {
+  const cur = Number(rm?.globalRateId) || 0;
+  if (cur === id) {
+    rmAction('global id=0', '已解除全局锁定, 交还系统自动调频。');
+  } else {
+    const r = (rm?.rates || []).find(v => v.id === id);
+    rmAction(`global id=${id}`, `已全局锁定 ${r ? r.fps : id}Hz。`);
+  }
+}
+
+function rmDraw() {
+  const rates = rm?.rates || [];
+  const ready = rm?.ready === 1 && rates.length > 0;
+  $('rm-empty').hidden = ready;
+  ['rm-lock-heading', 'rm-app-heading', 'rm-rates-heading'].forEach(id => { $(id).closest('.rm-section').hidden = !ready; });
+  if (!ready) {
+    $('rm-sub').textContent = rm ? '未扫描档位' : '正在读取…';
+    $('rm-entry-cap').textContent = '点击扫描导入档位表';
+    return;
+  }
+  // 顶栏状态
+  const gid = Number(rm.globalRateId) || 0;
+  const lockR = rates.find(r => r.id === gid);
+  const daemon = rm.daemon === 1;
+  $('rm-sub').textContent = `${daemon ? '服务运行中' : '服务已停止'} · 共 ${rates.length} 档${lockR ? ` · 锁定 ${lockR.fps}Hz` : ''}`;
+  $('rm-entry-cap').textContent = gid ? `已锁定 ${lockR ? lockR.fps : gid}Hz` : '全局锁定 · 按应用切换 · 档位标注';
+
+  // ---- 全局锁定网格 ----
+  const grid = $('rm-global-grid');
+  const gfrag = document.createDocumentFragment();
+  const sorted = [...rates].sort((a, b) => a.fps - b.fps || a.id - b.id);
+  sorted.forEach(r => {
+    const on = gid === r.id;
+    const b = radioButton(`rm-choice${r.type === 'overclock' ? ' oc' : ''}${on ? ' on' : ''}`,
+      `${r.fps}Hz ${r.type === 'overclock' ? '超频' : '原生'}`, on, () => rmToggleGlobal(r.id));
+    b.append(span('rm-num', String(r.fps)), span('rm-unit', 'Hz'));
+    const tag = span('rm-tag', r.type === 'overclock' ? '超' : '原');
+    b.append(tag);
+    gfrag.append(b);
+  });
+  grid.replaceChildren(gfrag);
+  $('rm-lock-caption').textContent = lockR ? `已锁定 ${lockR.fps}Hz` : '未锁定 (系统自动调频)';
+  $('rm-unlock').hidden = !gid;
+
+  // ---- 按应用切换 ----
+  $('rm-appsw').checked = rm.appSwitchEnabled === 1 || rm.appSwitchEnabled === true;
+  const intv = Number(rm.appSwitchInterval) || 1;
+  $('rm-intv').value = String(intv);
+  $('rm-intv-v').textContent = String(intv);
+  const appMap = rm.apps && typeof rm.apps === 'object' ? rm.apps : {};
+  const pkgs = Object.keys(appMap);
+  const rows = document.createDocumentFragment();
+  pkgs.forEach(pkg => {
+    const curId = Number(appMap[pkg]) || 0;
+    const row = document.createElement('div');
+    row.className = 'app-row';
+    const name = span('app-name', appNames[pkg] || pkg);
+    if (appNames[pkg] && appNames[pkg] !== pkg) name.append(span('app-pkg-sm', pkg));
+    row.append(name);
+    const select = document.createElement('select');
+    select.className = 'app-hz';
+    select.setAttribute('aria-label', `${pkg} 档位`);
+    sorted.forEach(r => {
+      const o = document.createElement('option');
+      o.value = String(r.id);
+      o.textContent = `${r.fps}Hz${r.type === 'overclock' ? ' · 超' : ''}`;
+      if (r.id === curId) o.selected = true;
+      select.append(o);
+    });
+    select.addEventListener('change', () => {
+      const r = rates.find(v => v.id === Number(select.value));
+      rmAction(`app set ${pkg} ${select.value}`, `已设置 ${appNames[pkg] || pkg} -> ${r ? r.fps : select.value}Hz。`);
+    });
+    row.append(select);
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'rc-btn del';
+    del.textContent = '移除';
+    del.addEventListener('click', () => {
+      rmAction(`app del ${pkg}`, `已移除 ${appNames[pkg] || pkg}。`);
+    });
+    row.append(del);
+    rows.append(row);
+  });
+  if (!pkgs.length) {
+    rows.append(span('app-empty', '尚未配置应用; 点「+ 添加应用」选择应用并设定其档位。'));
+  }
+  $('rm-app-rows').replaceChildren(rows);
+  const appCap = [rm.appSwitchEnabled === 1 ? '已开启' : '未开启'];
+  appCap.push(`${pkgs.length} 个应用`);
+  if (daemon) appCap.push('服务运行中');
+  $('rm-app-caption').textContent = appCap.join(' · ');
+
+  // ---- 档位标注 ----
+  rmDrawAnnotate();
+  rmSyncBusy();
+}
+
+function rmDrawAnnotate() {
+  const list = $('rm-rates-list');
+  const frag = document.createDocumentFragment();
+  const rates = rmRates();
+  const groups = new Map();
+  [...rates].sort((a, b) => a.fps - b.fps || a.id - b.id).forEach(r => {
+    const key = `${r.w}x${r.h}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+  const redraw = () => { rmDrawAnnotate(); rmSyncBusy(); };
+  groups.forEach((items, key) => {
+    const gh = span('rm-res-title', `${key} · ${items.length} 档`);
+    frag.append(gh);
+    items.forEach(r => {
+      const row = document.createElement('div');
+      row.className = 'rm-rate-row' + (r.type === 'overclock' ? ' oc' : '');
+      const num = span('rm-rate-num', String(r.fps));
+      num.append(span('rm-unit', 'Hz'));
+      row.append(num);
+      // 类型切换: 原生 <-> 超频
+      const typeBtn = document.createElement('button');
+      typeBtn.type = 'button';
+      typeBtn.className = 'rc-btn' + (r.type === 'overclock' ? ' on amber' : '');
+      typeBtn.textContent = r.type === 'overclock' ? '超频' : '原生';
+      typeBtn.addEventListener('click', () => {
+        if (r.type === 'overclock' && r.base === 1) { rmNotify('该档是原生基准, 请先将基准改为其他原生档。', true); return; }
+        r.type = r.type === 'overclock' ? 'native' : 'overclock';
+        r.base = 0;
+        if (r.type === 'overclock' && !r.ord) r.ord = 1;
+        rmDirty = true;
+        redraw();
+      });
+      row.append(typeBtn);
+      // 基准 (native 单选)
+      const baseBtn = document.createElement('button');
+      baseBtn.type = 'button';
+      baseBtn.className = 'rc-btn' + (r.base === 1 ? ' on' : '');
+      baseBtn.textContent = r.base === 1 ? '✓ 基准' : '设基准';
+      baseBtn.disabled = r.type !== 'native';
+      baseBtn.addEventListener('click', () => {
+        rates.forEach(v => { if (v.w === r.w && v.h === r.h) v.base = 0; });
+        r.base = 1;
+        rmDirty = true;
+        redraw();
+      });
+      row.append(baseBtn);
+      // ord (仅超频档)
+      if (r.type === 'overclock') {
+        const ordWrap = span('rc-order', '');
+        ordWrap.append(document.createTextNode('顺序'));
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '1';
+        input.max = '9';
+        input.value = String(r.ord || 1);
+        input.setAttribute('aria-label', `${r.fps}Hz 步进顺序`);
+        input.addEventListener('change', () => {
+          let n = parseInt(input.value, 10);
+          if (!Number.isFinite(n) || n < 1) n = 1;
+          if (n > 9) n = 9;
+          r.ord = n;
+          rmDirty = true;
+          redraw();
+        });
+        ordWrap.append(input);
+        row.append(ordWrap);
+      }
+      frag.append(row);
+    });
+  });
+  list.replaceChildren(frag);
+  const ocN = rates.filter(r => r.type === 'overclock').length;
+  const baseN = rates.filter(r => r.base === 1).length;
+  $('rm-rates-caption').textContent = `${rates.length} 档 · 超频 ${ocN} · 基准 ${baseN}${rmDirty ? ' · 待保存' : ''}`;
+  $('rm-rates-save').hidden = !rmDirty;
+}
+
+async function rmRatesSave() {
+  if (!rmDirty || !rmEdit) return;
+  const raw = rmEdit.map(r => `${r.id}:${r.w}:${r.h}:${r.fps}:${r.type}:${r.base}:${r.ord || 0}`).join(';');
+  rmDirty = false;
+  const saved = rmEdit;
+  rmEdit = null;
+  try {
+    const result = await command(`ratectl rates "${raw}"`, 30000);
+    if (result.rm) rm = result.rm;
+    rmDraw();
+    rmNotify('档位标注已保存并即时生效。');
+  } catch (error) {
+    rmDirty = true;
+    rmEdit = saved;
+    rmDraw();
+    rmNotify(error.message, true);
+  }
+}
+
+$('rm-entry').addEventListener('click', () => {
+  $('rm-page').hidden = false;
+  document.body.classList.add('rm-open');
+  rmNotify('');
+  rmLoad();
+});
+$('rm-back').addEventListener('click', () => {
+  $('rm-page').hidden = true;
+  document.body.classList.remove('rm-open');
+  refresh(false);
+});
+$('rm-scan').addEventListener('click', rmScan);
+$('rm-unlock').addEventListener('click', () => rmAction('global id=0', '已解除全局锁定。'));
+$('rm-stop').addEventListener('click', () => rmAction('stop', '已停止刷新率管理服务, 交还系统自动调频。'));
+$('rm-appsw').addEventListener('change', () => {
+  rmAction(`appsw appsw=${$('rm-appsw').checked ? 1 : 0}`,
+    $('rm-appsw').checked ? '按应用自动切换已开启。' : '按应用自动切换已关闭。');
+});
+let rmIntvTimer = 0;
+$('rm-intv').addEventListener('input', () => { $('rm-intv-v').textContent = $('rm-intv').value; });
+$('rm-intv').addEventListener('change', () => {
+  clearTimeout(rmIntvTimer);
+  rmIntvTimer = setTimeout(() => {
+    rmAction(`appsw appintv=${Number($('rm-intv').value) || 1}`, `检测间隔已设为 ${$('rm-intv').value} 秒。`);
+  }, 250);
+});
+$('rm-rates-save').addEventListener('click', rmRatesSave);
+
+// ---- 应用选择器 (供按应用添加) ----
+let apTimer = 0;
 async function openAppPicker() {
   if (apBusy) return;
   apBusy = true;
@@ -730,8 +646,7 @@ async function openAppPicker() {
       .map(a => (typeof a === 'string' ? { p: a, n: a } : a))
       .filter(a => a && a.p);
     all.forEach(a => { appNames[a.p] = a.n || a.p; });
-    const rc = state?.ratectl || {};
-    const appMap = rc.apps && typeof rc.apps === 'object' ? rc.apps : {};
+    const appMap = rm?.apps && typeof rm.apps === 'object' ? rm.apps : {};
     const avail = all.filter(a => !(a.p in appMap));
     renderApList(avail, '');
     $('ap-search').oninput = () => {
@@ -749,11 +664,9 @@ function renderApList(avail, kw) {
   const items = kw ? avail.filter(a =>
     a.p.toLowerCase().includes(kw) || (a.n || '').toLowerCase().includes(kw)) : avail;
   const frag = document.createDocumentFragment();
-  const rc = state?.ratectl || {};
-  const ladder = Array.isArray(rc.ladder) ? rc.ladder : [];
-  const baseHz = Number(rc.base) || 120;
-  const opts = perappRateOptions(rc);
-  const defHz = opts.length ? opts[opts.length - 1] : baseHz;
+  const rates = (rm?.rates || []).slice().sort((a, b) => b.fps - a.fps);
+  const defId = rates.length ? rates[0].id : 0;
+  const defFps = rates.length ? rates[0].fps : 0;
   items.slice(0, 300).forEach(a => {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -763,27 +676,20 @@ function renderApList(avail, kw) {
     btn.append(name, pkg);
     btn.addEventListener('click', () => {
       $('app-picker').hidden = true;
-      ratectlCommand(`app set ${a.p} ${defHz}`, `已添加 ${a.n || a.p} -> ${defHz}Hz, 可在名单中调整档位。`);
+      rmAction(`app set ${a.p} ${defId}`, `已添加 ${a.n || a.p} -> ${defFps}Hz, 可在名单中调整。`);
     });
     frag.append(btn);
   });
   if (!items.length) frag.append(span('app-empty', kw ? '无匹配的应用。' : '没有更多可添加的应用。'));
   list.replaceChildren(frag);
 }
-$('app-add').addEventListener('click', openAppPicker);
+$('rm-app-add').addEventListener('click', openAppPicker);
 $('ap-close').addEventListener('click', () => { $('app-picker').hidden = true; });
 $('app-picker').addEventListener('click', event => {
   if (event.target === $('app-picker')) $('app-picker').hidden = true;
 });
-$('refresh').addEventListener('click', () => refresh(true));
-$('apply').addEventListener('click', apply);
-$('restore').addEventListener('click', restore);
-$('verify-btn').addEventListener('click', () => verify());
-$('verify-auto-btn').addEventListener('click', () => verify(true));
-$('qq-input').addEventListener('keydown', event => {
-  if (event.key === 'Enter') verify();
-});
 
+// ================= 主题 =================
 const THEME_KEY = 'dtbo_theme';
 let theme = {};
 try { theme = JSON.parse(localStorage.getItem(THEME_KEY)) || {}; } catch { theme = {}; }
@@ -869,7 +775,9 @@ $('theme-btn').addEventListener('click', event => {
   panelOpen(panel.hidden || !panel.classList.contains('open'));
 });
 $('theme-panel').addEventListener('click', event => event.stopPropagation());
-document.addEventListener('click', () => panelOpen(false));
+document.addEventListener('click', event => {
+  if (!event.target.closest('#theme-panel')) panelOpen(false);
+});
 $('mode-seg').addEventListener('click', event => {
   const b = event.target.closest('button[data-mode]');
   if (!b) return;
@@ -947,6 +855,6 @@ $('copy-machine').addEventListener('click', async () => {
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) refresh(false);
+  if (!document.hidden && $('rm-page').hidden) refresh(false);
 });
 refresh(false);

@@ -210,16 +210,16 @@ esac
 
 MODE_INIT=0
 [ "$OC_MODE" = "ko" ] && MODE_INIT=1
-if [ "$KO_AVAIL" != "1" ]; then MODE_INIT=0; fi
 if [ "$DEVICE" = "ace6u" ]; then
     OC_MODE=ko
     echo " 一加ACE6至尊版: 仅支持 KO 内核挂载方案 (DTBO 方案已移除)"
-elif [ "$KO_AVAIL" = "1" ]; then
+else
     choose "选择超频方案:" "DTBO 补丁 (刷入分区, 重启生效)|KO 内核挂载 (不改DTBO, 即时生效)" "$MODE_INIT"
     OC_MODE=$([ "$SEL" = "1" ] && echo ko || echo dtbo)
-else
-    OC_MODE=dtbo
-    echo " 本机型暂无可用 KO, 超频方案: DTBO 补丁"
+    if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then
+        echo " 本机型未内置 KO, 需侧载 KO 文件才会生效"
+        echo " (放入 /data/adb/dtbo_oc/ko/$DEVICE.ko 后重启)"
+    fi
 fi
 
 if [ -n "$CHOICES" ] && [ "$OC_OK" = "1" ]; then

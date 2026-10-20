@@ -55,30 +55,14 @@
 
     <section class="setting-section" aria-labelledby="rate-heading">
       <div class="section-heading"><h2 id="rate-heading">超频档位</h2><span id="rates-caption">自动识别中</span></div>
-      <div id="rate-tools" hidden>
-        <select id="lockhz-select" class="lockhz-select" aria-label="全局锁定档位"></select>
-        <button id="lock-btn" class="mini-btn lock" type="button">全局锁定</button>
-        <span id="lock-state" class="badge">自动调频</span>
-      </div>
       <div id="rates" class="rate-grid" role="radiogroup" aria-label="选择超频档位"><div class="placeholder">正在读取可用档位…</div></div>
     </section>
 
-    <section class="setting-section" id="perapp-section" aria-labelledby="perapp-heading" hidden>
-      <div class="section-heading"><h2 id="perapp-heading">按应用自动切换</h2><span id="perapp-caption">未开启</span></div>
-      <div class="perapp-body">
-        <label class="avb-toggle" for="perapp-toggle"><span>按应用自动切换</span><input id="perapp-toggle" type="checkbox" role="switch"></label>
-        <label class="avb-toggle" for="lockboot-toggle"><span>开机自动锁定基准档</span><input id="lockboot-toggle" type="checkbox" role="switch"></label>
-        <div class="app-list-head"><span>应用名单</span><button id="app-add" class="mini-btn" type="button">+ 添加应用</button></div>
-        <div id="app-rows" class="app-rows"></div>
-      </div>
-    </section>
-
-    <div id="app-picker" class="app-picker" hidden>
-      <div class="ap-panel">
-        <div class="ap-head"><input id="ap-search" type="text" placeholder="搜索包名…" autocomplete="off"><button id="ap-close" class="mini-btn ghost" type="button">关闭</button></div>
-        <div id="ap-list" class="ap-list"></div>
-      </div>
-    </div>
+    <button id="rm-entry" class="rm-entry" type="button">
+      <span class="rme-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11l-1 8.5L18.5 10.5H12l1-8.5Z"/></svg></span>
+      <span class="rme-text"><strong>刷新率管理</strong><small id="rm-entry-cap">全局锁定 · 按应用切换 · 档位标注</small></span>
+      <span class="rme-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg></span>
+    </button>
 
     <section class="setting-section" aria-labelledby="batt-heading">
       <div class="section-heading"><h2 id="batt-heading">电池 / 充电方案</h2><span id="batt-caption">自动识别中</span></div>
@@ -95,11 +79,6 @@
       <label class="avb-toggle" for="ltpo-off"><span>禁用 LTPO/VRR 动态刷新率</span><input id="ltpo-off" type="checkbox" role="switch"></label>
     </section>
 
-    <section class="setting-section" aria-labelledby="fps-heading">
-      <div class="section-heading"><h2 id="fps-heading">帧率显示</h2><span id="fps-caption">实时 FPS</span></div>
-      <label class="avb-toggle" for="fps-show"><span>屏幕显示当前刷新率</span><input id="fps-show" type="checkbox" role="switch"></label>
-    </section>
-
     <section class="apply-section" aria-label="应用设置">
       <div class="selection-line"><span>当前选择</span><strong id="selection">—</strong></div>
       <button id="apply" class="apply-button" type="button" disabled><span id="apply-label">保存并应用</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
@@ -108,6 +87,60 @@
 
     <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> <span id="ver">v0</span></footer>
   </main>
+
+  <div id="rm-page" class="rm-page" hidden>
+    <div class="rm-sheet">
+      <header class="rm-topbar">
+        <button id="rm-back" class="icon-button" type="button" aria-label="返回主页面"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="rm-title"><h2>刷新率管理</h2><span id="rm-sub">正在读取…</span></div>
+        <button id="rm-scan" class="mini-btn" type="button">扫描档位</button>
+      </header>
+      <div class="rm-body">
+        <div id="rm-notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+        <section class="rm-section" id="rm-empty" hidden>
+          <div class="rm-empty-card">
+            <strong>尚未导入档位表</strong>
+            <small>点击右上角「扫描档位」, 从系统读取当前全部刷新率档位 (需已应用超频 DTBO / KO)。</small>
+          </div>
+        </section>
+
+        <section class="rm-section" aria-labelledby="rm-lock-heading">
+          <div class="section-heading"><h2 id="rm-lock-heading">全局锁定</h2><span id="rm-lock-caption">—</span></div>
+          <div id="rm-global-grid" class="rm-grid" role="radiogroup" aria-label="选择全局锁定档位"></div>
+          <div class="rm-lock-actions">
+            <button id="rm-unlock" class="mini-btn ghost" type="button" hidden>解除锁定</button>
+            <button id="rm-stop" class="mini-btn ghost danger" type="button">停止服务</button>
+          </div>
+        </section>
+
+        <section class="rm-section" aria-labelledby="rm-app-heading">
+          <div class="section-heading"><h2 id="rm-app-heading">按应用切换</h2><span id="rm-app-caption">—</span></div>
+          <div class="perapp-body">
+            <label class="avb-toggle" for="rm-appsw"><span>按应用自动切换</span><input id="rm-appsw" type="checkbox" role="switch"></label>
+            <label class="avb-toggle" for="rm-intv"><span>检测间隔 <b id="rm-intv-v">1</b> 秒</span><input id="rm-intv" type="range" min="1" max="30" step="1"></label>
+            <div class="app-list-head"><span>应用名单</span><button id="rm-app-add" class="mini-btn" type="button">+ 添加应用</button></div>
+            <div id="rm-app-rows" class="app-rows"></div>
+          </div>
+        </section>
+
+        <section class="rm-section" aria-labelledby="rm-rates-heading">
+          <div class="section-heading"><h2 id="rm-rates-heading">档位标注</h2><span id="rm-rates-caption">—</span></div>
+          <p class="rm-hint">将超频档标注为「超频」并为每个分辨率选定原生基准, 切换时将逐级步进保护面板。</p>
+          <div id="rm-rates-list" class="rm-rates-list"></div>
+          <button id="rm-rates-save" class="mini-btn wide" type="button" hidden>保存档位标注</button>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div id="app-picker" class="app-picker" hidden>
+    <div class="ap-panel">
+      <div class="ap-head"><input id="ap-search" type="text" placeholder="搜索包名…" autocomplete="off"><button id="ap-close" class="mini-btn ghost" type="button">关闭</button></div>
+      <div id="ap-list" class="ap-list"></div>
+    </div>
+  </div>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>

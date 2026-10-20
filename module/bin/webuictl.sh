@@ -14,9 +14,6 @@ LOG="$DATA_DIR/last_run.log"
 SF_LOCK=/data/local/tmp/dtbo_oc_switch.lock
 SF_PIN="$DATA_DIR/sf_pin"
 SF_OWNS_LOCK=0
-RC_CONF="$DATA_DIR/ratectl"
-RC_PID="$DATA_DIR/ratectl.pid"
-RC_DAEMON="$MODDIR/bin/ratectl_daemon.sh"
 
 json_string() {
     awk 'BEGIN{printf "\""} {if(NR>1) printf "\\n";
@@ -47,10 +44,201 @@ trap 'exit 143' TERM
 mkdir -p "$DATA_DIR" "$WORK" "$WORK/ko"
 chmod 755 "$TOOL" "$DTC" 2>/dev/null
 
-# ---- 快速路径: apps / fps / ratectl 不依赖机型识别/KO/DTBO/license, 跳过重初始化 ----
-RC_CONF_FAST="$DATA_DIR/ratectl"
+# ---- 快速路径: apps / ratectl (星驰式刷新率管理) 不依赖机型识别/KO/DTBO/license ----
+RC_RATES="$DATA_DIR/rates.conf"
+RC_CFG="$DATA_DIR/rc_config.json"
+RC_APPS="$DATA_DIR/apps.conf"
 RC_PID_FAST="$DATA_DIR/ratectl.pid"
 RC_DAEMON_FAST="$MODDIR/bin/ratectl_daemon.sh"
+
+rm_daemon_running() {
+    [ -f "$RC_PID_FAST" ] || return 1
+    DP=$(cat "$RC_PID_FAST" 2>/dev/null)
+    [ -n "$DP" ] || { rm -f "$RC_PID_FAST"; return 1; }
+    kill -0 "$DP" 2>/dev/null && return 0
+    rm -f "$RC_PID_FAST"
+    return 1
+}
+
+rm_daemon_restart() {
+    # 星驰配置变化后重启守护: 启动时自动 apply 全局锁定档
+    rm_daemon_running && kill "$(cat "$RC_PID_FAST")" 2>/dev/null
+    rm -f "$RC_PID_FAST"
+    [ -x "$RC_DAEMON_FAST" ] || return 1
+    nohup sh "$RC_DAEMON_FAST" >/dev/null 2>&1 &
+    sleep 0.15
+    rm_daemon_running && return 0
+    sleep 0.2
+    rm_daemon_running
+}
+
+rm_daemon_stop() {
+    rm_daemon_running && kill "$(cat "$RC_PID_FAST")" 2>/dev/null
+    rm -f "$RC_PID_FAST"
+    return 0
+}
+
+rm_cfg_json() {
+    # 输出 rc_config.json 内容 (缺省值补齐): globalId/appsw/appintv
+    GID=0; ASW=1; AIV=1
+    if [ -f "$RC_CFG" ]; then
+        v=$(grep -o '"globalRateId"[^0-9]*[0-9]*' "$RC_CFG" 2>/dev/null | grep -o '[0-9]*$')
+        case "$v" in ''|*[!0-9]*) v=0 ;; esac
+        [ -n "$v" ] && GID=$v
+        case "$(grep -o '"appSwitchEnabled"[^a-z]*[a-z]*' "$RC_CFG" 2>/dev/null | grep -oE '(true|false)$')" in
+            false) ASW=0 ;; *) ASW=1 ;;
+        esac
+        i=$(grep -o '"appSwitchInterval"[^0-9]*[0-9]*' "$RC_CFG" 2>/dev/null | grep -o '[0-9]*$')
+        case "$i" in ''|*[!0-9]*) i=1 ;; esac
+        [ "$i" -ge 1 ] 2>/dev/null && AIV=$i
+    fi
+    printf '{"globalRateId":%s,"appSwitchEnabled":%s,"appSwitchInterval":%s}' "$GID" "$ASW" "$AIV"
+}
+
+rm_cfg_set() {
+    # rm_cfg_set global=<n> appsw=<0|1> appintv=<n>
+    GID=""; ASW=""; AIV=""
+    for kv in "$@"; do
+        K=${kv%%=*}; V=${kv#*=}
+        case "$K" in
+            global) case "$V" in ''|*[!0-9]*) fail "档位ID无效" ;; esac; GID=$V ;;
+            appsw)  case "$V" in 0|1) ;; *) fail "appsw 参数无效" ;; esac; ASW=$V ;;
+            appintv) case "$V" in ''|*[!0-9]*) fail "间隔无效" ;; esac; [ "$V" -ge 1 ] && [ "$V" -le 30 ] || fail "间隔范围 1-30 秒"; AIV=$V ;;
+        esac
+    done
+    CUR=$(rm_cfg_json)
+    [ -z "$GID" ] && GID=$(printf '%s' "$CUR" | grep -o '"globalRateId":[0-9]*' | cut -d: -f2)
+    [ -z "$ASW" ] && ASW=$(printf '%s' "$CUR" | grep -o '"appSwitchEnabled":[0-9]*' | cut -d: -f2)
+    [ -z "$AIV" ] && AIV=$(printf '%s' "$CUR" | grep -o '"appSwitchInterval":[0-9]*' | cut -d: -f2)
+    printf '{"globalRateId":%s,"appSwitchEnabled":%s,"appSwitchInterval":%s}' "$GID" "$ASW" "$AIV" > "$RC_CFG"
+}
+
+rm_emit_status() {
+    # rm 状态 JSON: rates 数组 + 配置 + 应用规则 + 守护状态
+    printf '"rm":{"ready":%s,' "$([ -s "$RC_RATES" ] && echo 1 || echo 0)"
+    rm_cfg_json
+    printf ',"daemon":%s,"apps":{' "$(rm_daemon_running && echo 1 || echo 0)"
+    FIRST=1
+    if [ -f "$RC_APPS" ]; then
+        while IFS= read -r l; do
+            case "$l" in ''|*=*) ;; *) continue ;; esac
+            P=${l%%=*}; V=${l#*=}
+            case "$P$V" in *[\"\\]*) continue ;; esac
+            case "$V" in ''|*[!0-9]*) continue ;; esac
+            [ "$FIRST" = "1" ] || printf ','
+            printf '"%s":%s' "$P" "$V"
+            FIRST=0
+        done < "$RC_APPS"
+    fi
+    printf '},"rates":['
+    FIRST=1
+    if [ -s "$RC_RATES" ]; then
+        awk -F: '
+        $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ {
+            type=($5=="overclock")?"overclock":"native"
+            base=($6=="1")?1:0
+            ord=($7 ~ /^[0-9]+$/)?$7:0
+            if (n++) printf ","
+            printf "{\"id\":%s,\"w\":%s,\"h\":%s,\"fps\":%s,\"type\":\"%s\",\"base\":%s,\"ord\":%s}", $1,$2,$3,$4,type,base,ord
+        }' "$RC_RATES"
+    fi
+    printf ']}\n'
+}
+
+rm_scan_rates() {
+    # 星驰式全量扫描: dumpsys SurfaceFlinger 档位表 -> rates.conf
+    # 同 id 保留已有 type/base/ord 标注; 每个分辨率保证一个原生基准,
+    # 超频档 ord 自动按 fps 升序编号 (开箱即用, 可在子页面修改)
+    SCAN=$(timeout -k 1 8 dumpsys SurfaceFlinger 2>/dev/null | grep 'id=[0-9]*, hwcId=')
+    [ -n "$SCAN" ] || fail "未读取到档位信息 (请确认屏幕已点亮)"
+    printf '%s\n' "$SCAN" | awk '
+    function trim(s){gsub(/^[ \t]+|[ \t]+$/,"",s);return s}
+    {
+        id=""; res=""; rate=""
+        if (match($0,/id=[0-9]+,/)) { id=substr($0,RSTART+3,RLENGTH-4) }
+        if (match($0,/resolution=[0-9]+x[0-9]+/)) { res=substr($0,RSTART+11,RLENGTH-11) }
+        if (match($0,/(vsyncRate|refreshRate)=[0-9.]+/)) {
+            rate=substr($0,RSTART,RLENGTH); sub(/^[^=]+=/,"",rate)
+        }
+        if (id=="" || res=="" || rate=="") next
+        split(res,xy,"x")
+        if (xy[1] !~ /^[0-9]+$/ || xy[2] !~ /^[0-9]+$/) next
+        fps=int(rate+0.5)
+        if (fps<=0) next
+        key=id
+        if (!(key in seen)) { seen[key]=1; order[++n]=id; w[id]=xy[1]; h[id]=xy[2]; f[id]=fps }
+    }
+    END {
+        for (i=1;i<=n;i++) {
+            id=order[i]
+            print id ":" w[id] ":" h[id] ":" f[id] ":native:0:0"
+        }
+    }' > "$DATA_DIR/rates_scan.raw"
+    [ -s "$DATA_DIR/rates_scan.raw" ] || fail "档位解析失败"
+    # 合并旧标注
+    awk -F: '
+    FILENAME ~ /rates_scan/ { nid[$1]=$0; nw[$1]=$2; nh[$1]=$3; nf[$1]=$4; order[++n]=$1; next }
+    $1 ~ /^[0-9]+$/ { t[$1]=$5; b[$1]=$6; o[$1]=$7 }
+    END {
+        for (i=1;i<=n;i++) {
+            id=order[i]
+            type=(t[id]=="overclock")?"overclock":"native"
+            base=(b[id]=="1")?"1":"0"
+            ord=(o[id] ~ /^[0-9]+$/)?o[id]:0
+            print id ":" nw[id] ":" nh[id] ":" nf[id] ":" type ":" base ":" ord
+        }
+    }' "$DATA_DIR/rates_scan.raw" "$RC_RATES" > "$DATA_DIR/rates_merge.tmp" 2>/dev/null
+    mv -f "$DATA_DIR/rates_merge.tmp" "$RC_RATES"
+    rm -f "$DATA_DIR/rates_scan.raw"
+    # 每个分辨率保证原生基准: 无 base 时取最高 fps 的 native 档
+    awk -F: '
+    {
+        res=$2"x"$3
+        if ($5=="native") {
+            if (!(res in bw) || $4>bf[res]) { bw[res]=$1; bf[res]=$4 }
+        }
+        lines[++n]=$0; res_of[n]=res
+    }
+    END {
+        for (i=1;i<=n;i++) {
+            split(lines[i],f,":")
+            out=lines[i]
+            if (f[5]=="native" && f[6]=="1" && bw[res_of[i]]!=f[1]) {
+                out=f[1]":"f[2]":"f[3]":"f[4]":native:0:0"
+            } else if (f[5]=="native" && f[6]=="0" && bw[res_of[i]]==f[1]) {
+                out=f[1]":"f[2]":"f[3]":"f[4]":native:1:0"
+            }
+            print out
+        }
+    }' "$RC_RATES" > "$DATA_DIR/rates_base.tmp"
+    mv -f "$DATA_DIR/rates_base.tmp" "$RC_RATES"
+    # 超频档 ord 按 fps 升序自动编号 (仅空缺时)
+    awk -F: '
+    {
+        res=$2"x"$3
+        lines[++n]=$0
+        if ($5=="overclock") { oc_res[n]=res; oc_fps[n]=$4 }
+        else oc_res[n]=""
+    }
+    END {
+        # 计算每个分辨率超频档排序位次
+        for (i=1;i<=n;i++) if (oc_res[i]!="") {
+            k=1
+            for (j=1;j<=n;j++) if (oc_res[j]==oc_res[i]) {
+                if (oc_fps[j]<oc_fps[i]) k++
+                else if (oc_fps[j]==oc_fps[i] && j<i) k++
+            }
+            ord_of[i]=k
+        }
+        for (i=1;i<=n;i++) {
+            split(lines[i],f,":")
+            if (f[5]=="overclock" && f[7]=="0") {
+                print f[1]":"f[2]":"f[3]":"f[4]":overclock:"f[6]":"ord_of[i]
+            } else print lines[i]
+        }
+    }' "$RC_RATES" > "$DATA_DIR/rates_ord.tmp"
+    mv -f "$DATA_DIR/rates_ord.tmp" "$RC_RATES"
+}
 
 case "${1:-}" in
     apps)
@@ -89,162 +277,82 @@ case "${1:-}" in
         printf ']}\n'
         exit 0
         ;;
-    fps)
-        # 帧率显示开关: 同开发者选项"显示刷新率" (Settings.System.SHOW_REFRESH_RATE)
-        # root 下必须 --user 0 定向写 user 0 的 SettingsProvider, 否则写入不生效
-        ACT="${2:-}"
-        case "$ACT" in
-            on)  settings --user 0 put system show_refresh_rate 1 ;;
-            off) settings --user 0 put system show_refresh_rate 0 ;;
-            *) fail "用法: fps on|off" ;;
-        esac
-        FPS_SHOW=0
-        GETV=$(settings --user 0 get system show_refresh_rate 2>/dev/null)
-        case "$GETV" in 1|1.0|true) FPS_SHOW=1 ;; esac
-        if [ "$ACT" = "on" ] && [ "$FPS_SHOW" != "1" ]; then
-            settings put system show_refresh_rate 1 2>/dev/null
-            GETV=$(settings --user 0 get system show_refresh_rate 2>/dev/null)
-            case "$GETV" in 1|1.0|true) FPS_SHOW=1 ;; esac
-        fi
-        MSG=$([ "$FPS_SHOW" = "1" ] && echo "帧率显示已开启 (开发者选项-显示刷新率)" || echo "帧率显示已关闭")
-        printf '{"ok":true,"fps_show":%s,"message":' "$FPS_SHOW"
-        printf '%s' "$MSG" | json_string
-        printf '}\n'
-        exit 0
-        ;;
     ratectl)
-        # 仅操作 ratectl 配置文件与守护进程, 无需识别机型
-        RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0; RC_APPS=""
-        rc_load_fast() {
-            RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0; RC_APPS=""
-            [ -f "$RC_CONF_FAST" ] || return 0
-            RC_BASE=$(sed -n 's/^BASE=//p' "$RC_CONF_FAST" | tail -n 1)
-            RC_LADDER=$(sed -n 's/^LADDER=//p' "$RC_CONF_FAST" | tail -n 1)
-            RC_PERAPP=$(sed -n 's/^PERAPP=//p' "$RC_CONF_FAST" | tail -n 1)
-            RC_LOCKBOOT=$(sed -n 's/^LOCKBOOT=//p' "$RC_CONF_FAST" | tail -n 1)
-            RC_LOCKHZ=$(sed -n 's/^LOCKHZ=//p' "$RC_CONF_FAST" | tail -n 1)
-            RC_APPS=$(grep '^APP:' "$RC_CONF_FAST" | cut -d: -f2-)
-            [ "$RC_PERAPP" = "1" ] || RC_PERAPP=0
-            [ "$RC_LOCKBOOT" = "1" ] || RC_LOCKBOOT=0
-            case "$RC_LOCKHZ" in ''|*[!0-9]*) RC_LOCKHZ=0 ;; esac
-            return 0
-        }
-        rc_set_fast() {
-            sed -i "s|^$1=.*|$1=$2|" "$RC_CONF_FAST" 2>/dev/null
-            grep -q "^$1=" "$RC_CONF_FAST" 2>/dev/null || echo "$1=$2" >> "$RC_CONF_FAST"
-        }
-        rc_app_set_fast() {
-            sed -i "\|^APP:$1=|d" "$RC_CONF_FAST" 2>/dev/null
-            echo "APP:$1=$2" >> "$RC_CONF_FAST"
-        }
-        rc_app_del_fast() {
-            sed -i "\|^APP:$1=|d" "$RC_CONF_FAST" 2>/dev/null
-        }
-        daemon_running_fast() {
-            [ -f "$RC_PID_FAST" ] || return 1
-            DP=$(cat "$RC_PID_FAST" 2>/dev/null)
-            [ -n "$DP" ] || { rm -f "$RC_PID_FAST"; return 1; }
-            kill -0 "$DP" 2>/dev/null && return 0
-            rm -f "$RC_PID_FAST"
-            return 1
-        }
-        daemon_sync_fast() {
-            if [ "$RC_PERAPP" = "1" ] || [ "$RC_LOCKBOOT" = "1" ] || [ "$RC_LOCKHZ" != "0" ]; then
-                [ -x "$RC_DAEMON_FAST" ] || return 1
-                daemon_running_fast && return 0
-                nohup sh "$RC_DAEMON_FAST" >/dev/null 2>&1 &
-                sleep 0.1
-                daemon_running_fast && return 0
-                sleep 0.15
-                daemon_running_fast
-            else
-                if daemon_running_fast; then kill "$(cat "$RC_PID_FAST")" 2>/dev/null; fi
-                rm -f "$RC_PID_FAST"
-                return 0
-            fi
-        }
-        emit_ratectl_fast() {
-            printf '"ratectl":{"base":"%s","ladder":[%s],"perapp":%s,"lockboot":%s,"lockhz":%s,"daemon":%s,"apps":{' \
-                "${RC_BASE:-}" "$(echo "$RC_LADDER" | sed 's/,*$//;s/^,//')" "$RC_PERAPP" "$RC_LOCKBOOT" "$RC_LOCKHZ" \
-                "$(daemon_running_fast && echo 1 || echo 0)"
-            FIRST=1
-            for l in $RC_APPS; do
-                P=${l%%=*}; V=${l#*=}
-                case "$P$V" in *[\"\\]*) continue ;; esac
-                [ "$FIRST" = "1" ] || printf ','
-                printf '"%s":%s' "$P" "$V"
-                FIRST=0
-            done
-            printf '}}'
-        }
+        # 星驰式刷新率管理: status / scan / global / appsw / app / rates / stop
         shift
         SUB="${1:-}"
         shift 2>/dev/null
-        rc_load_fast
         case "$SUB" in
-            save)
-                MSG=""
-                for kv in "$@"; do
-                    K=${kv%%=*}; V=${kv#*=}
-                    case "$K" in
-                        base)
-                            case "$V" in ''|*[!0-9]*) fail "基准档位无效" ;; esac
-                            [ "$V" -ge 30 ] && [ "$V" -le 300 ] || fail "基准档位超出范围"
-                            rc_set_fast BASE "$V"
-                            RC_BASE=$V
-                            MSG="${MSG}基准 ${V}Hz; "
-                            ;;
-                        ladder)
-                            case "$V" in ''|*[!0-9,]*) fail "档位序列无效" ;; esac
-                            CLEAN=$(echo "$V" | sed 's/^,*//;s/,*$//;s/,,\+/,/g')
-                            rc_set_fast LADDER "$CLEAN"
-                            RC_LADDER=$CLEAN
-                            MSG="${MSG}切换序列已更新; "
-                            ;;
-                        perapp)
-                            case "$V" in 0|1) ;; *) fail "perapp 参数无效" ;; esac
-                            rc_set_fast PERAPP "$V"
-                            RC_PERAPP=$V
-                            [ "$V" = "1" ] && MSG="${MSG}按应用切换已开启; " || MSG="${MSG}按应用切换已关闭; "
-                            ;;
-                        lockboot)
-                            case "$V" in 0|1) ;; *) fail "lockboot 参数无效" ;; esac
-                            rc_set_fast LOCKBOOT "$V"
-                            RC_LOCKBOOT=$V
-                            [ "$V" = "1" ] && MSG="${MSG}开机自动锁定已开启; " || MSG="${MSG}开机自动锁定已关闭; "
-                            ;;
-                        lockhz)
-                            # 全局档位锁定: >0 锁定到该档位, 0 解除
-                            case "$V" in ''|*[!0-9]*) fail "全局锁定档位无效" ;; esac
-                            [ "$V" -ge 0 ] && [ "$V" -le 300 ] || fail "全局锁定档位超出范围"
-                            rc_set_fast LOCKHZ "$V"
-                            RC_LOCKHZ=$V
-                            if [ "$V" = "0" ]; then MSG="${MSG}全局锁定已关闭; "; else MSG="${MSG}全局锁定 ${V}Hz; "; fi
-                            ;;
-                        *) fail "未知参数 $K" ;;
-                    esac
-                done
-                daemon_sync_fast || MSG="${MSG}(后台服务启动失败, 请重启后重试); "
+            status)
+                printf '{"ok":true,'
+                rm_emit_status
+                printf '}\n'
+                exit 0
+                ;;
+            scan)
+                rm_scan_rates
+                rm_daemon_restart 2>/dev/null
+                printf '{"ok":true,"message":"扫描完成",'
+                rm_emit_status
+                printf '}\n'
+                exit 0
+                ;;
+            global)
+                # ratectl global id=<n>|0 ; 0 = 解除锁定并交还系统
+                ID="${1:-}"
+                ID=${ID#id=}
+                case "$ID" in ''|*[!0-9]*) fail "档位ID无效" ;; esac
+                if [ "$ID" != "0" ] && [ -s "$RC_RATES" ]; then
+                    grep -q "^$ID:" "$RC_RATES" 2>/dev/null || fail "档位 $ID 不在已扫描列表中, 请先扫描"
+                fi
+                rm_cfg_set global="$ID"
+                if [ "$ID" = "0" ]; then
+                    # 解除锁定: 交还系统自动调频 + 恢复刷新率上下限
+                    rm_daemon_stop
+                    service call SurfaceFlinger 1035 i32 -1 >/dev/null 2>&1
+                    rm -f "$DATA_DIR/sf_pin"
+                    if [ -s "$DATA_DIR/ratectl.pinbak" ]; then
+                        OMIN=$(cut -d' ' -f2 "$DATA_DIR/ratectl.pinbak" 2>/dev/null)
+                        OPEAK=$(cut -d' ' -f3 "$DATA_DIR/ratectl.pinbak" 2>/dev/null)
+                        if [ "$OMIN" = "-" ]; then settings --user 0 delete system min_refresh_rate 2>/dev/null; else settings --user 0 put system min_refresh_rate "$OMIN" 2>/dev/null; fi
+                        if [ "$OPEAK" = "-" ]; then settings --user 0 delete system peak_refresh_rate 2>/dev/null; else settings --user 0 put system peak_refresh_rate "$OPEAK" 2>/dev/null; fi
+                        rm -f "$DATA_DIR/ratectl.pinbak"
+                    fi
+                    MSG="已解除全局锁定, 交还系统自动调频"
+                else
+                    rm_daemon_restart || MSG="(后台服务启动失败, 将在重启后生效); "
+                    MSG="${MSG}已锁定并即时应用"
+                fi
                 printf '{"ok":true,"message":'
-                printf '%s' "${MSG}已保存" | json_string
+                printf '%s' "$MSG" | json_string
                 printf ','
-                emit_ratectl_fast
+                rm_emit_status
+                printf '}\n'
+                exit 0
+                ;;
+            appsw)
+                rm_cfg_set "$@" 2>/dev/null || rm_cfg_set appsw=1
+                rm_daemon_restart 2>/dev/null
+                printf '{"ok":true,"message":"已保存",'
+                rm_emit_status
                 printf '}\n'
                 exit 0
                 ;;
             app)
-                ACT="${1:-}"; PKG="${2:-}"; HZ="${3:-}"
+                ACT="${1:-}"; PKG="${2:-}"; AID="${3:-}"
                 case "$ACT" in
                     set)
                         case "$PKG" in ''|*[!a-zA-Z0-9._]*) fail "包名无效" ;; esac
-                        case "$HZ" in ''|*[!0-9]*) fail "档位无效" ;; esac
-                        [ "$HZ" -ge 30 ] && [ "$HZ" -le 300 ] || fail "档位超出范围"
-                        rc_app_set_fast "$PKG" "$HZ"
-                        MSG="已设置 $PKG -> ${HZ}Hz"
+                        case "$AID" in ''|*[!0-9]*) fail "档位ID无效" ;; esac
+                        sed -i "\|^$PKG=|d" "$RC_APPS" 2>/dev/null
+                        echo "$PKG=$AID" >> "$RC_APPS"
+                        rm_daemon_restart 2>/dev/null
+                        MSG="已设置 $PKG -> ID $AID"
                         ;;
                     del)
                         case "$PKG" in ''|*[!a-zA-Z0-9._]*) fail "包名无效" ;; esac
-                        rc_app_del_fast "$PKG"
+                        sed -i "\|^$PKG=|d" "$RC_APPS" 2>/dev/null
+                        rm_daemon_restart 2>/dev/null
                         MSG="已移除 $PKG"
                         ;;
                     *) fail "未知子操作" ;;
@@ -252,8 +360,33 @@ case "${1:-}" in
                 printf '{"ok":true,"message":'
                 printf '%s' "$MSG" | json_string
                 printf ','
-                rc_load_fast
-                emit_ratectl_fast
+                rm_emit_status
+                printf '}\n'
+                exit 0
+                ;;
+            rates)
+                # ratectl rates "id:w:h:fps:type:base:ord;id:...;..."
+                RAW="${1:-}"
+                [ -n "$RAW" ] || fail "档位表为空"
+                printf '%s' "$RAW" | tr ';' '\n' | awk -F: '
+                NF>=7 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ &&
+                ($5=="native"||$5=="overclock") && ($6=="0"||$6=="1") && $7 ~ /^[0-9]+$/ {
+                    print $1":"$2":"$3":"$4":"$5":"$6":"$7
+                }' > "$RC_RATES.tmp"
+                [ -s "$RC_RATES.tmp" ] || { rm -f "$RC_RATES.tmp"; fail "档位表格式无效"; }
+                mv -f "$RC_RATES.tmp" "$RC_RATES"
+                rm_daemon_restart 2>/dev/null
+                printf '{"ok":true,"message":"档位配置已保存",'
+                rm_emit_status
+                printf '}\n'
+                exit 0
+                ;;
+            stop)
+                rm_cfg_set global=0
+                rm_daemon_stop
+                service call SurfaceFlinger 1035 i32 -1 >/dev/null 2>&1
+                printf '{"ok":true,"message":"已停止刷新率管理服务",'
+                rm_emit_status
                 printf '}\n'
                 exit 0
                 ;;
@@ -409,62 +542,6 @@ lic_query
 MACHINE=""
 [ -x "$TOOL" ] && MACHINE=$("$TOOL" machineid 2>/dev/null | sed -n 's/^MACHINE=//p')
 
-RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0; RC_APPS=""
-rc_load() {
-    RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0; RC_APPS=""
-    [ -f "$RC_CONF" ] || return 0
-    RC_BASE=$(sed -n 's/^BASE=//p' "$RC_CONF" | tail -n 1)
-    RC_LADDER=$(sed -n 's/^LADDER=//p' "$RC_CONF" | tail -n 1)
-    RC_PERAPP=$(sed -n 's/^PERAPP=//p' "$RC_CONF" | tail -n 1)
-    RC_LOCKBOOT=$(sed -n 's/^LOCKBOOT=//p' "$RC_CONF" | tail -n 1)
-    RC_LOCKHZ=$(sed -n 's/^LOCKHZ=//p' "$RC_CONF" | tail -n 1)
-    RC_APPS=$(grep '^APP:' "$RC_CONF" | cut -d: -f2-)
-    [ "$RC_PERAPP" = "1" ] || RC_PERAPP=0
-    [ "$RC_LOCKBOOT" = "1" ] || RC_LOCKBOOT=0
-    case "$RC_LOCKHZ" in ''|*[!0-9]*) RC_LOCKHZ=0 ;; esac
-    return 0
-}
-rc_set() {
-    sed -i "s|^$1=.*|$1=$2|" "$RC_CONF" 2>/dev/null
-    grep -q "^$1=" "$RC_CONF" 2>/dev/null || echo "$1=$2" >> "$RC_CONF"
-}
-rc_app_set() {
-    sed -i "\|^APP:$1=|d" "$RC_CONF" 2>/dev/null
-    echo "APP:$1=$2" >> "$RC_CONF"
-}
-rc_app_del() {
-    sed -i "\|^APP:$1=|d" "$RC_CONF" 2>/dev/null
-}
-daemon_running() {
-    [ -f "$RC_PID" ] || return 1
-    DP=$(cat "$RC_PID" 2>/dev/null)
-    [ -n "$DP" ] || { rm -f "$RC_PID"; return 1; }
-    kill -0 "$DP" 2>/dev/null && return 0
-    rm -f "$RC_PID"
-    return 1
-}
-daemon_start() {
-    [ -x "$RC_DAEMON" ] || return 1
-    daemon_running && return 0
-    nohup sh "$RC_DAEMON" >/dev/null 2>&1 &
-    sleep 0.3
-    daemon_running
-}
-daemon_stop() {
-    if daemon_running; then
-        kill "$(cat "$RC_PID")" 2>/dev/null
-    fi
-    rm -f "$RC_PID"
-    return 0
-}
-rc_daemon_sync() {
-    if [ "$RC_PERAPP" = "1" ] || [ "$RC_LOCKBOOT" = "1" ] || [ "$RC_LOCKHZ" != "0" ]; then
-        daemon_start || return 1
-    else
-        daemon_stop
-    fi
-    return 0
-}
 # 钉住/恢复系统刷新率设置 (min/peak_refresh_rate): 防止系统 ADFR 与锁定档位来回拉锯
 # 备份文件格式: "<boot_id> <原min> <原peak>", "-" 表示原值为空 (恢复时删除键)
 w_pin_bak() {
@@ -491,21 +568,6 @@ w_pin_restore() {
     rm -f "$DATA_DIR/ratectl.pinbak"
     return 0
 }
-emit_ratectl_json() {
-    printf '"ratectl":{"base":"%s","ladder":[%s],"perapp":%s,"lockboot":%s,"lockhz":%s,"daemon":%s,"apps":{' \
-        "${RC_BASE:-}" "$(echo "$RC_LADDER" | sed 's/,*$//;s/^,//')" "$RC_PERAPP" "$RC_LOCKBOOT" "$RC_LOCKHZ" \
-        "$(daemon_running && echo 1 || echo 0)"
-    FIRST=1
-    for l in $RC_APPS; do
-        P=${l%%=*}; V=${l#*=}
-        case "$P$V" in *[\"\\]*) continue ;; esac
-        [ "$FIRST" = "1" ] || printf ','
-        printf '"%s":%s' "$P" "$V"
-        FIRST=0
-    done
-    printf '}}'
-}
-rc_load
 
 sf_boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
 
@@ -610,14 +672,12 @@ emit_status() {
     fi
     KO_BUILTIN=0
     [ -n "$DEVICE" ] && [ -f "$MODDIR/ko/$DEVICE.ko" ] && KO_BUILTIN=1
-    FPS_SHOW=0
-    case "$(settings --user 0 get system show_refresh_rate 2>/dev/null)" in 1.0|1|true) FPS_SHOW=1 ;; esac
     printf '{"ok":true,"device":"%s","name":' "$DEVICE"
     printf '%s' "$DEVNAME" | json_string
     printf ',"maxrate":"%s","choices":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$OC_OK" "$BATT_OK"
     printf '"hz":%s,"battery":%s,"oc_mode":"%s","ltpo_off":%s,"ko_only":%s,' "$HZ" "$BATTERY" "$OC_MODE" "$LTPO_OFF" "$([ "$DEVICE" = "ace6u" ] && echo true || echo false)"
-    printf '"fps_show":%s,' "$FPS_SHOW"
     printf '"oc_active":%s,' "$OC_ACTIVE"
+    printf '"rm_ready":%s,' "$([ -s "$DATA_DIR/rates.conf" ] && echo 1 || echo 0)"
     printf '"ko":{"available":%s,"builtin":%s,"loaded":%s,"installed":%s,"vermatch":%s,"file":' "$KO_AVAIL" "$KO_BUILTIN" "$KO_LOADED" "$KO_INSTALLED" "${KO_VERMATCH:-null}"
     printf '%s' "${KO_FILE:-}" | json_string
     printf '},"dtbo_patched":%s,"stock_ok":%s,"version":"%s","machine":' "$DTBO_PATCHED" "$([ -f "$STOCK" ] && echo 1 || echo 0)" "$MODVER"
@@ -633,8 +693,6 @@ emit_status() {
     else
         printf ',"sf":{"ok":false}'
     fi
-    printf ','
-    emit_ratectl_json
     printf '}\n'
 }
 
@@ -686,115 +744,6 @@ case "${1:-}" in
     status)
         emit_status
         ;;
-    fps)
-        # 帧率显示开关: 同开发者选项"显示刷新率" (Settings.System.SHOW_REFRESH_RATE)
-        ACT="${2:-}"
-        case "$ACT" in
-            on)  settings put system show_refresh_rate 1.0 2>/dev/null || fail "开启失败 (settings 命令不可用)" ;;
-            off) settings put system show_refresh_rate 0.0 2>/dev/null || fail "关闭失败 (settings 命令不可用)" ;;
-            *) fail "用法: fps on|off" ;;
-        esac
-        FPS_SHOW=0
-        case "$(settings --user 0 get system show_refresh_rate 2>/dev/null)" in 1.0|1|true) FPS_SHOW=1 ;; esac
-        MSG=$([ "$FPS_SHOW" = "1" ] && echo "帧率显示已开启" || echo "帧率显示已关闭")
-        printf '{"ok":true,"fps_show":%s,"message":' "$FPS_SHOW"
-        printf '%s' "$MSG" | json_string
-        printf '}\n'
-        ;;
-    apps)
-        APPSLIST=$(pm list packages -3 2>/dev/null | sed 's/^package://' | sort)
-        [ -n "$APPSLIST" ] || fail "无法获取应用列表"
-        printf '{"ok":true,"apps":['
-        FIRST=1
-        for p in $APPSLIST; do
-            case "$p" in *[\"\\]*) continue ;; esac
-            [ "$FIRST" = "1" ] || printf ','
-            printf '"%s"' "$p"
-            FIRST=0
-        done
-        printf ']}\n'
-        ;;
-    ratectl)
-        shift
-        SUB="${1:-}"
-        shift 2>/dev/null
-        case "$SUB" in
-            save)
-                MSG=""
-                for kv in "$@"; do
-                    K=${kv%%=*}; V=${kv#*=}
-                    case "$K" in
-                        base)
-                            case "$V" in ''|*[!0-9]*) fail "基准档位无效" ;; esac
-                            [ "$V" -ge 30 ] && [ "$V" -le 300 ] || fail "基准档位超出范围"
-                            rc_set BASE "$V"
-                            RC_BASE=$V
-                            MSG="${MSG}基准 ${V}Hz; "
-                            ;;
-                        ladder)
-                            case "$V" in ''|*[!0-9,]*) fail "档位序列无效" ;; esac
-                            CLEAN=$(echo "$V" | sed 's/^,*//;s/,*$//;s/,,\+/,/g')
-                            rc_set LADDER "$CLEAN"
-                            RC_LADDER=$CLEAN
-                            MSG="${MSG}切换序列已更新; "
-                            ;;
-                        perapp)
-                            case "$V" in 0|1) ;; *) fail "perapp 参数无效" ;; esac
-                            rc_set PERAPP "$V"
-                            RC_PERAPP=$V
-                            [ "$V" = "1" ] && MSG="${MSG}按应用切换已开启; " || MSG="${MSG}按应用切换已关闭; "
-                            ;;
-                        lockboot)
-                            case "$V" in 0|1) ;; *) fail "lockboot 参数无效" ;; esac
-                            rc_set LOCKBOOT "$V"
-                            RC_LOCKBOOT=$V
-                            [ "$V" = "1" ] && MSG="${MSG}开机自动锁定已开启; " || MSG="${MSG}开机自动锁定已关闭; "
-                            ;;
-                        lockhz)
-                            case "$V" in ''|*[!0-9]*) fail "全局锁定档位无效" ;; esac
-                            [ "$V" -ge 0 ] && [ "$V" -le 300 ] || fail "全局锁定档位超出范围"
-                            rc_set LOCKHZ "$V"
-                            RC_LOCKHZ=$V
-                            if [ "$V" = "0" ]; then MSG="${MSG}全局锁定已关闭; "; else MSG="${MSG}全局锁定 ${V}Hz; "; fi
-                            ;;
-                        *) fail "未知参数 $K" ;;
-                    esac
-                done
-                rc_daemon_sync || MSG="${MSG}(后台服务启动失败, 请重启后重试); "
-                printf '{"ok":true,"message":'
-                printf '%s' "${MSG}已保存" | json_string
-                printf ','
-                rc_load
-                emit_ratectl_json
-                printf '}\n'
-                ;;
-            app)
-                ACT="${1:-}"; PKG="${2:-}"; HZ="${3:-}"
-                case "$ACT" in
-                    set)
-                        case "$PKG" in ''|*[!a-zA-Z0-9._]*) fail "包名无效" ;; esac
-                        case "$HZ" in ''|*[!0-9]*) fail "档位无效" ;; esac
-                        [ "$HZ" -ge 30 ] && [ "$HZ" -le 300 ] || fail "档位超出范围"
-                        rc_app_set "$PKG" "$HZ"
-                        MSG="已设置 $PKG -> ${HZ}Hz"
-                        ;;
-                    del)
-                        case "$PKG" in ''|*[!a-zA-Z0-9._]*) fail "包名无效" ;; esac
-                        rc_app_del "$PKG"
-                        MSG="已移除 $PKG"
-                        ;;
-                    *) fail "未知子操作" ;;
-                esac
-                printf '{"ok":true,"message":'
-                printf '%s' "$MSG" | json_string
-                printf ','
-                rc_load
-                emit_ratectl_json
-                printf '}\n'
-                ;;
-            *) fail "未知子操作" ;;
-        esac
-        ;;
     save)
         shift
         MSG=""
@@ -825,7 +774,7 @@ case "${1:-}" in
             fail "一加ACE6至尊版仅支持 KO 方案 (DTBO 方案已移除)"
         fi
         if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then
-            fail "本机型未找到 KO ($DEVICE.ko), 无法使用 KO 方案"
+            MSG="${MSG}未找到 KO ($DEVICE.ko), 侧载到 /data/adb/dtbo_oc/ko/ 后重启生效; "
         fi
         if [ "$OC_MODE" = "ko" ]; then
             if [ "$BATTERY" != "0" ]; then
@@ -880,10 +829,13 @@ EOF
         ;;
     restore)
         sf_release_quiet
-        if [ -f "$RC_CONF" ]; then
-            sed -i 's/^PERAPP=.*/PERAPP=0/;s/^LOCKBOOT=.*/LOCKBOOT=0/' "$RC_CONF" 2>/dev/null
+        # 星驰: 停止刷新率守护并解除全局锁定 (交还系统自动调频)
+        if [ -s "$RC_CFG" ]; then
+            sed -i 's/"globalRateId":[0-9]*/"globalRateId":0/' "$RC_CFG" 2>/dev/null
         fi
-        daemon_stop
+        rm_daemon_stop
+        service call SurfaceFlinger 1035 i32 -1 >/dev/null 2>&1
+        rm -f "$SF_PIN"
         MODNM=""
         if [ -f "$DATA_DIR/ko_loaded" ]; then
             MODNM=$(cat "$DATA_DIR/ko_loaded" 2>/dev/null)
@@ -943,31 +895,6 @@ EOF
         TW=$(awk -F'|' -v id="$ID" '$1=="M"&&$2==id{print $3}' "$WORK/sf_modes.txt")
         TH=$(awk -F'|' -v id="$ID" '$1=="M"&&$2==id{print $4}' "$WORK/sf_modes.txt")
         THZ=$(awk -F'|' -v id="$ID" '$1=="M"&&$2==id{print int($5+0.5)}' "$WORK/sf_modes.txt")
-        # 星驰式双向阶梯: 目标档与当前档之间逐级步进 (升/降均走), 50ms 间隔
-        CURHZ=$(awk -F'|' '$1=="A"{print int($5+0.5)}' "$WORK/sf_modes.txt")
-        if [ -n "$RC_LADDER" ] && [ -n "$CURHZ" ] && [ "$CURHZ" != "$THZ" ]; then
-            AGRP2=$(awk -F'|' '$1=="A"{print $6}' "$WORK/sf_modes.txt")
-            LADS=$(echo "$RC_LADDER" | tr ',' ' ')
-            if [ "$CURHZ" -lt "$THZ" ]; then
-                LORDER=$(echo "$LADS" | tr ' ' '\n' | sort -n | tr '\n' ' ')
-            else
-                LORDER=$(echo "$LADS" | tr ' ' '\n' | sort -rn | tr '\n' ' ')
-            fi
-            for L in $LORDER; do
-                case "$L" in ''|*[!0-9]*) continue ;; esac
-                if [ "$CURHZ" -lt "$THZ" ]; then
-                    [ "$L" -le "$CURHZ" ] && continue
-                    [ "$L" -lt "$THZ" ] || continue
-                else
-                    [ "$L" -ge "$CURHZ" ] && continue
-                    [ "$L" -gt "$THZ" ] || continue
-                fi
-                LID=$(awk -F'|' -v hz="$L" -v g="$AGRP2" '$1=="M" && int($5+0.5)==hz && $6==g {print $2; exit}' "$WORK/sf_modes.txt")
-                [ -n "$LID" ] || continue
-                sf_send "$LID"
-                usleep 50000 2>/dev/null || sleep 0.05
-            done
-        fi
         sf_send "$ID" || fail "切换指令发送失败 (本机系统可能不支持在线切换)"
         OK=0
         TRY=0
@@ -995,17 +922,10 @@ EOF
         sf_lock || fail "已有切换任务进行中, 请稍后重试"
         sf_send -1 || fail "交还指令发送失败 (本机系统可能不支持)"
         rm -f "$SF_PIN"
-        if [ -f "$RC_CONF" ]; then
-            if [ "$RC_LOCKBOOT" = "1" ]; then
-                rc_set LOCKBOOT 0
-                RC_LOCKBOOT=0
-            fi
-            if [ "$RC_LOCKHZ" != "0" ]; then
-                rc_set LOCKHZ 0
-                RC_LOCKHZ=0
-            fi
-            rc_daemon_sync
+        if [ -s "$RC_CFG" ]; then
+            sed -i 's/"globalRateId":[0-9]*/"globalRateId":0/' "$RC_CFG" 2>/dev/null
         fi
+        rm_daemon_stop
         w_pin_restore
         sleep 0.4
         sf_capture 2>/dev/null

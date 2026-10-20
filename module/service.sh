@@ -14,7 +14,8 @@ mkdir -p "$DATA_DIR" "$WORK" "$WORK/ko"
 : > "$LOG"
 chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
 
-# 按应用切换 / 开机锁定守护: 等 boot 完成后按 ratectl 配置启动 (幂等)
+# 星驰式刷新率守护: 等 boot 完成后按 rc_config.json / apps.conf 启动 (幂等)
+# 启动条件: 全局档位锁定已设置(globalRateId!=0) 或 按应用切换开启且有规则
 (
     i=0
     while [ "$i" -lt 45 ]; do
@@ -22,10 +23,15 @@ chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
         sleep 2
         i=$((i+1))
     done
-    [ -f "$DATA_DIR/ratectl" ] || exit 0
-    _PA=$(sed -n 's/^PERAPP=//p' "$DATA_DIR/ratectl" | tail -n 1)
-    _LB=$(sed -n 's/^LOCKBOOT=//p' "$DATA_DIR/ratectl" | tail -n 1)
-    [ "$_PA" = "1" ] || [ "$_LB" = "1" ] || exit 0
+    [ -f "$DATA_DIR/rates.conf" ] || exit 0
+    _GID=$(grep -o '"globalRateId"[^0-9]*[0-9]*' "$DATA_DIR/rc_config.json" 2>/dev/null | grep -o '[0-9]*$')
+    _ASW=$(grep -o '"appSwitchEnabled"[^a-z]*[a-z]*' "$DATA_DIR/rc_config.json" 2>/dev/null | grep -oE '(true|false)$')
+    _NA=0
+    [ -f "$DATA_DIR/apps.conf" ] && _NA=$(grep -c '=' "$DATA_DIR/apps.conf" 2>/dev/null)
+    _RUN=0
+    { [ -n "$_GID" ] && [ "$_GID" != "0" ]; } && _RUN=1
+    { [ "$_ASW" != "false" ] && [ "${_NA:-0}" -gt 0 ]; } && _RUN=1
+    [ "$_RUN" = "1" ] || exit 0
     if [ -f "$DATA_DIR/ratectl.pid" ]; then
         kill -0 "$(cat "$DATA_DIR/ratectl.pid" 2>/dev/null)" 2>/dev/null && exit 0
     fi

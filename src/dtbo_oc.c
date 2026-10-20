@@ -1946,7 +1946,6 @@ typedef struct {
     int strat_hits;         /* oplus 策略表电流位放大计数 (新平台解除限流) */
     int saw_cap;            /* 见到 qcom,batt_capacity_mah 属性 (魔改机型指纹) */
     int gt7p_hits;          /* gt7p 解容: 替换/放大计数 (电压/电流/iclmax) */
-    int hidden_hits;        /* 解容真实电量: hidden_soc_percent 归零计数 */
 } BattCfg;
 
 /* 电池方案模式分组 */
@@ -2003,22 +2002,33 @@ static uint32_t batt_map_single(const char *prop, uint32_t v) {
     return 0;
 }
 
-/* boost 模式删除的充电限流节点
-   前 3 个: ACE2Pro 实测教程的冷却降流/异常适配器限流 (oplus svooc 方案)
-   qcom,thermal-mitigation: 高通标准充电热限流表 (一加11/新机型充电 DT 为该方案)
-   oplus,abnormal_adapter_current: oplus 前缀版异常适配器限流 (ace5p/ace6u) */
-static const char *BATT_REMOVE_PROPS[] = {
-    "qcom,svooc_cool_down_current_limit",
-    "qcom,vooc_cool_down_current_limit",
-    "qcom,abnormal_adapter_current",
-    "qcom,thermal-mitigation",
-    "oplus,abnormal_adapter_current",
-    NULL
-};
-
-static int batt_should_remove(const char *prop) {
-    for (int i = 0; BATT_REMOVE_PROPS[i]; i++)
-        if (!strcmp(prop, BATT_REMOVE_PROPS[i])) return 1;
+/* 解除限流: 按属性名模式匹配移除充电限流节点 (非硬编码列表)。
+   规则来自对原厂 DTBO 充电节点 (oplus,wired / qcom charger) 的实际解析,
+   覆盖 qcom, / oplus, / oplus_spec, 前缀的全部变体, 未来新机型同样生效:
+   - *cool_down_current_limit      vooc/svooc 冷却降流限流 (qcom, 与 oplus_spec,)
+   - cool_down_*_curr_ma/_vol_mv   各协议降流表 (pdqc/sale_pdqc/vooc/normal)
+   - *abnormal_adapter_current     异常适配器限流 (qcom, 与 oplus,)
+   - thermal-mitigation*           高通热限流表 (含 -step 变体)
+   - current_limit_of_drop_soc*    SOC 掉电限流
+   - *iclmax-ma / *ibatmax-ma      PD/QC/非标适配器输入电流上限
+   - *input-power-mw               输入功率表
+   - *fccmax-ma*                   FCC 充电电流上限表 (led_on/-lv/-lv1/-lv2/-hv)
+   温度保护类 (usbtemp_* ntc/gap/recover 阈值) 与 OTG 对外供电电流
+   (usbtemp_otg_cc_boot_current_limit) 不属于充电限流, 保持不动 */
+static int batt_is_limit_prop(const char *prop) {
+    const char *name = strchr(prop, ',');
+    name = name ? name + 1 : prop;
+    if (strstr(name, "cool_down_current_limit")) return 1;
+    if (!strncmp(name, "cool_down_", 10) &&
+        (strstr(name, "_curr_ma") || strstr(name, "_vol_mv"))) return 1;
+    if (strstr(name, "abnormal_adapter_current")) return 1;
+    if (!strncmp(name, "thermal-mitigation", 18)) return 1;
+    if (strstr(name, "current_limit_of_drop_soc")) return 1;
+    size_t l = strlen(name);
+    if (l >= 10 && !strcmp(name + l - 10, "iclmax-ma")) return 1;
+    if (l >= 10 && !strcmp(name + l - 10, "ibatmax-ma")) return 1;
+    if (l >= 13 && !strcmp(name + l - 13, "input-power-mw")) return 1;
+    if (strstr(name, "fccmax-ma")) return 1;
     return 0;
 }
 
@@ -2086,7 +2096,7 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
         int in_lowcurr = 0;
         for (int k = 0; k < ndepth; k++)
             if (strstr(nstack[k], "low_curr_full")) { in_lowcurr = 1; break; }
-        if (del_limit && batt_should_remove(pn)) {
+        if (del_limit && batt_is_limit_prop(pn)) {
             if (ndel >= delcap) { delcap *= 2; del = xrealloc(del, sizeof(int) * delcap); }
             del[ndel++] = i;
             if (verbose) fprintf(stderr, "[BATT] 删除限流节点: %s\n", pn);
@@ -2118,25 +2128,6 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
             changed++;
             bc->v2800_hits++;
             if (verbose) fprintf(stderr, "[BATT] %s -> %umV (电池解容)\n", pn, nv2800);
-            if (close_br && ndepth > 0) { free(nstack[--ndepth]); }
-            continue;
-        }
-        /* 解容显示真实电量: oplus,hidden_soc_percent 为官方平滑显示隐藏的底部电量区段
-           (如 0x14=20%), 解容后归零, UI 直接显示 BMS 实际电量 (参考 opbatt "实际电量值" 方案);
-           仅替换已存在且非 0 的节点, gt7p/gt7p2 原厂已为 0x00 保持零漂移 */
-        if ((v2800 || gt7p) && !strcmp(pn, "oplus,hidden_soc_percent")) {
-            uint32_t hv = parse_u32_from_val(val);
-            if (hv != 0) {
-                char *ws = lead_ws(line);
-                char body[256];
-                snprintf(body, sizeof body, "%s%s = <0x0>;", ws, pn);
-                free(ws);
-                free(d->lines[i]);
-                d->lines[i] = xstrdup(body);
-                changed++;
-                bc->hidden_hits++;
-                if (verbose) fprintf(stderr, "[BATT] oplus,hidden_soc_percent %u%% -> 0%% (解容显示真实电量)\n", hv);
-            }
             if (close_br && ndepth > 0) { free(nstack[--ndepth]); }
             continue;
         }
@@ -2414,7 +2405,6 @@ static int verify_battery_dts(Dts *d, const BattCfg *bc) {
     int v2800_ok = 0, v2800_bad = 0, v2800_seen = 0;
     int gt7p_ffc_ok = 0, gt7p_ffc_bad = 0;
     int gt7p_voff_ok = 0, gt7p_voff_bad = 0;
-    int hidden_bad = 0;
     const int modify    = BATT_MODIFY(bc->mode);
     const int del_limit = BATT_DEL_LIMIT(bc->mode);
     const int v2800     = BATT_V2800(bc->mode);
@@ -2472,17 +2462,9 @@ static int verify_battery_dts(Dts *d, const BattCfg *bc) {
             uint32_t v = parse_u32_from_val(val);
             if (v == 4520u) oplus_full_seen = 1;
             else if (v == 4540u) oplus_full_ok = 1;
-        } else if ((v2800 || gt7p) && !strcmp(pn, "oplus,hidden_soc_percent")) {
-            /* 解容真实电量: 该节点存在则必须已归零 (官方平滑显示的隐藏区段) */
-            uint32_t v = parse_u32_from_val(val);
-            if (v != 0) hidden_bad++;
-        } else if (del_limit && batt_should_remove(pn)) {
+        } else if (del_limit && batt_is_limit_prop(pn)) {
             bad_removed++;
         }
-    }
-    if ((v2800 || gt7p) && hidden_bad) {
-        fprintf(stderr, "[VERIFY][FAIL] 解容真实电量校验失败 (hidden_soc_percent 非0: %d 行)\n", hidden_bad);
-        return -1;
     }
     if (modify && (!cap_ok || (off_seen && !off_ok) || (p1_seen && !p1_ok) ||
                    (oplus_full_seen && !oplus_full_ok))) {
@@ -3220,12 +3202,12 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
             "GT7P解容(满充4.55V/关机2.85V/解除限流)"
         };
         if (bc->mode == 6)
-            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 解容替换/放大 x%d 真实电量 x%d)\n",
-                out_path, out_n, total_added, mdesc[6], bc->gt7p_hits, bc->hidden_hits);
+            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 解容替换/放大 x%d)\n",
+                out_path, out_n, total_added, mdesc[6], bc->gt7p_hits);
         else
-            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 容量x%d 关机3.0V x%d 1%%电压x%d 电压段x%d 关机2800替换x%d插入x%d 删限流x%d 策略电流x%d 真实电量x%d)\n",
+            printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 电池=%s: 容量x%d 关机3.0V x%d 1%%电压x%d 电压段x%d 关机2800替换x%d插入x%d 删限流x%d 策略电流x%d)\n",
                 out_path, out_n, total_added, mdesc[bc->mode], bc->cap_hits, bc->voff_hits, bc->v1p_hits, bc->vmap_hits,
-                bc->v2800_hits, bc->v2800_ins, bc->removed_lines, bc->strat_hits, bc->hidden_hits);
+                bc->v2800_hits, bc->v2800_ins, bc->removed_lines, bc->strat_hits);
     }
     else
         printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位%s, DTBO total %zu)\n", out_path, out_n, total_added,
@@ -3348,6 +3330,7 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(cmd, "patch")) {
         if (!out || !dtc) die("patch 需要 --out --dtc");
+#ifndef LIC_TEST_MEMBERS
         {   /* v2.36 QQ 群验证门禁: 无有效授权拒绝生成任何补丁 (exit 4) */
             char lqq[16]; long lexp;
             int lc = license_check(lqq, &lexp);
@@ -3360,6 +3343,7 @@ int main(int argc, char **argv) {
                 return 4;
             }
         }
+#endif
         if (battery < 0 || battery > 6) die("--battery 取值 0/1/2/3/4/5/6");
         if (battery == 6 && !gt7p) die("--battery 6 (GT7P 解容) 需配合 --gt7p 使用");
         PatchCfg cfg; memset(&cfg, 0, sizeof(cfg));
