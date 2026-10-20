@@ -5,6 +5,8 @@ const $ = id => document.getElementById(id);
 const COMMAND = 'sh /data/adb/modules/dtbo_oc/bin/webuictl.sh';
 let state = null;
 let busy = false;
+let rcBusy = false;
+let apBusy = false;
 let connected = false;
 let dirty = false;
 let rcSel = { base: null, ladder: [] };
@@ -107,6 +109,7 @@ function controls() {
     $('selection').textContent = `${hzText} · ${modeText}`;
   }
   $('restore').disabled = !ready || busy;
+  syncRcControls();
 }
 
 function radioButton(className, label, checked, onClick, disabled = false) {
@@ -136,19 +139,40 @@ function switchModeActive() {
 }
 
 async function ratectlCommand(args, okMsg) {
-  if (busy) return;
-  busy = true;
-  controls();
+  if (rcBusy || busy) return;
+  rcBusy = true;
+  syncRcControls();
   try {
     const result = await command(`ratectl ${args}`);
+    if (result && result.ratectl) {
+      state.ratectl = result.ratectl;
+      if (!rcDirty) {
+        rcSel = {
+          base: result.ratectl.base ? Number(result.ratectl.base) : null,
+          ladder: Array.isArray(result.ratectl.ladder) ? [...result.ratectl.ladder] : []
+        };
+      }
+      drawRates();
+      drawPerapp();
+      controls();
+    } else {
+      render(await command('status'));
+    }
     notify(okMsg || result.message || '已保存。');
-    render(await command('status'));
   } catch (error) {
     notify(error.message, true);
+    drawPerapp();
   } finally {
-    busy = false;
+    rcBusy = false;
+    syncRcControls();
     controls();
   }
+}
+
+function syncRcControls() {
+  const off = rcBusy || busy;
+  ['perapp-toggle', 'lockboot-toggle'].forEach(id => { $(id).disabled = off; });
+  document.querySelectorAll('#app-rows select, #app-rows button').forEach(el => { el.disabled = off; });
 }
 
 async function switchHz(hz) {
@@ -407,6 +431,7 @@ function drawPerapp() {
   if (baseHz) cap.push(`基准 ${baseHz}Hz`);
   if (rc.daemon === 1) cap.push('服务运行中');
   $('perapp-caption').textContent = cap.join(' · ');
+  syncRcControls();
 }
 
 function drawBatts() {
@@ -503,6 +528,8 @@ function render(data, applied = false) {
     $('current-detail').textContent = data.dtbo_patched ? 'DTBO: 已修改' : 'DTBO: 原厂';
   }
   $('ltpo-off').checked = data.ltpo_off === 1;
+  $('fps-show').checked = data.fps_show === 1;
+  if (data.version) $('ver').textContent = data.version;
   drawLicense();
   drawRates();
   drawPerapp();
@@ -651,6 +678,22 @@ $('ltpo-off').addEventListener('change', () => {
   dirty = true;
   controls();
 });
+$('fps-show').addEventListener('change', async () => {
+  const want = $('fps-show').checked;
+  const prev = state?.fps_show === 1;
+  if (want === prev) return;
+  $('fps-show').disabled = true;
+  try {
+    const r = await command(`fps ${want ? 'on' : 'off'}`, 15000);
+    if (state) state.fps_show = r.fps_show === 1 ? 1 : 0;
+    notify(r.fps_show === 1 ? '帧率显示已开启。' : '帧率显示已关闭。');
+  } catch (error) {
+    $('fps-show').checked = prev;
+    notify(error.message, true);
+  } finally {
+    $('fps-show').disabled = false;
+  }
+});
 $('perapp-toggle').addEventListener('change', () => {
   ratectlCommand(`save perapp=${$('perapp-toggle').checked ? 1 : 0}`,
     $('perapp-toggle').checked ? '按应用自动切换已开启。' : '按应用自动切换已关闭。');
@@ -661,7 +704,8 @@ $('lockboot-toggle').addEventListener('change', () => {
 });
 let apTimer = 0;
 async function openAppPicker() {
-  if (busy) return;
+  if (apBusy) return;
+  apBusy = true;
   const picker = $('app-picker');
   const list = $('ap-list');
   list.replaceChildren(span('app-empty', '正在读取应用列表…'));
@@ -680,6 +724,8 @@ async function openAppPicker() {
     };
   } catch (error) {
     list.replaceChildren(span('app-empty', error.message));
+  } finally {
+    apBusy = false;
   }
 }
 function renderApList(avail, kw) {

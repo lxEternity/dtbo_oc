@@ -13,6 +13,9 @@ read_id() {
         ID=$(tr -cd 'A-Za-z0-9' < "$p" | cut -c1-16)
         [ -n "$ID" ] && return 0
     done
+    # 天机平台 (ACE6至尊版等): 回退读 cmdline 的 oplusboot.serialno
+    ID=$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | sed -n 's/^oplusboot\.serialno=//p' | tr -cd 'A-Za-z0-9' | cut -c1-16)
+    [ -n "$ID" ] && return 0
     ID="0"
     return 0
 }
@@ -25,9 +28,12 @@ echo "===================================="
 
 if [ -x "$TOOL" ]; then
     TOOLID=$("$TOOL" machineid 2>/dev/null | sed -n 's/^MACHINE=//p')
+    # 仅当模块ID有效(非0)或本脚本未取到ID时才采用模块结果, 防止旧版二进制的0覆盖
     if [ -n "$TOOLID" ] && [ "$TOOLID" != "$ID" ]; then
-        echo " 提示: 模块授权使用的ID为 $TOOLID (以此为准)"
-        ID="$TOOLID"
+        if [ "$TOOLID" != "0" ] || [ "$ID" = "0" ]; then
+            echo " 提示: 模块授权使用的ID为 $TOOLID (以此为准)"
+            ID="$TOOLID"
+        fi
     fi
 fi
 

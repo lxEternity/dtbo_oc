@@ -177,6 +177,26 @@ static void get_machine(char out[17]) {
             for (size_t i = 0; i < r && n < 16; i++) if (isalnum((unsigned char)buf[i])) out[n++] = buf[i];
         }
     }
+    /* 天机平台 (ACE6至尊版等): soc0/DT serial 均不存在, 回退读 /proc/cmdline
+       的 oplusboot.serialno= (内核只读视图, root 无法篡改, 可作授权绑定) */
+    if (n == 0) {
+        FILE *f = fopen("/proc/cmdline", "rb");
+        if (f) {
+            char buf[4096];
+            size_t r = fread(buf, 1, sizeof buf - 1, f);
+            fclose(f);
+            buf[r] = 0;
+            const char *key = "oplusboot.serialno=";
+            char *p = strstr(buf, key);
+            if (p) {
+                p += strlen(key);
+                for (; *p && n < 16; p++) {
+                    if (isalnum((unsigned char)*p)) out[n++] = *p;
+                    else break;
+                }
+            }
+        }
+    }
     out[n] = 0;
     if (n == 0) strcpy(out, "0");
 }

@@ -3,6 +3,8 @@ PATH=/system/bin:/system/xbin:/vendor/bin:/data/adb/ksu/bin:$PATH
 export PATH
 MODDIR=${0%/*}/..
 TOOL="$MODDIR/arm64/dtbo_oc"
+MODVER=$(sed -n 's/^version=//p' "$MODDIR/module.prop" 2>/dev/null)
+[ -n "$MODVER" ] || MODVER=v0
 DTC="$MODDIR/arm64/dtc"
 DATA_DIR=/data/adb/dtbo_oc
 WORK="$DATA_DIR/work"
@@ -358,14 +360,17 @@ emit_status() {
     fi
     KO_BUILTIN=0
     [ -n "$DEVICE" ] && [ -f "$MODDIR/ko/$DEVICE.ko" ] && KO_BUILTIN=1
+    FPS_SHOW=0
+    case "$(settings get system show_refresh_rate 2>/dev/null)" in 1.0|1|true) FPS_SHOW=1 ;; esac
     printf '{"ok":true,"device":"%s","name":' "$DEVICE"
     printf '%s' "$DEVNAME" | json_string
     printf ',"maxrate":"%s","choices":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$OC_OK" "$BATT_OK"
     printf '"hz":%s,"battery":%s,"oc_mode":"%s","ltpo_off":%s,"ko_only":%s,' "$HZ" "$BATTERY" "$OC_MODE" "$LTPO_OFF" "$([ "$DEVICE" = "ace6u" ] && echo true || echo false)"
+    printf '"fps_show":%s,' "$FPS_SHOW"
     printf '"oc_active":%s,' "$OC_ACTIVE"
     printf '"ko":{"available":%s,"builtin":%s,"loaded":%s,"installed":%s,"vermatch":%s,"file":' "$KO_AVAIL" "$KO_BUILTIN" "$KO_LOADED" "$KO_INSTALLED" "${KO_VERMATCH:-null}"
     printf '%s' "${KO_FILE:-}" | json_string
-    printf '},"dtbo_patched":%s,"stock_ok":%s,"version":"v2.3.7","machine":' "$DTBO_PATCHED" "$([ -f "$STOCK" ] && echo 1 || echo 0)"
+    printf '},"dtbo_patched":%s,"stock_ok":%s,"version":"%s","machine":' "$DTBO_PATCHED" "$([ -f "$STOCK" ] && echo 1 || echo 0)" "$MODVER"
     printf '%s' "$MACHINE" | json_string
     printf ',"license":{"state":"%s","qq":' "$LIC_STATE"
     printf '%s' "$LIC_QQ" | json_string
@@ -430,6 +435,21 @@ emit_result_with_sf() {
 case "${1:-}" in
     status)
         emit_status
+        ;;
+    fps)
+        # 帧率显示开关: 同开发者选项"显示刷新率" (Settings.System.SHOW_REFRESH_RATE)
+        ACT="${2:-}"
+        case "$ACT" in
+            on)  settings put system show_refresh_rate 1.0 2>/dev/null || fail "开启失败 (settings 命令不可用)" ;;
+            off) settings put system show_refresh_rate 0.0 2>/dev/null || fail "关闭失败 (settings 命令不可用)" ;;
+            *) fail "用法: fps on|off" ;;
+        esac
+        FPS_SHOW=0
+        case "$(settings get system show_refresh_rate 2>/dev/null)" in 1.0|1|true) FPS_SHOW=1 ;; esac
+        MSG=$([ "$FPS_SHOW" = "1" ] && echo "帧率显示已开启" || echo "帧率显示已关闭")
+        printf '{"ok":true,"fps_show":%s,"message":' "$FPS_SHOW"
+        printf '%s' "$MSG" | json_string
+        printf '}\n'
         ;;
     apps)
         APPSLIST=$(pm list packages -3 2>/dev/null | sed 's/^package://' | sort)

@@ -97,13 +97,18 @@
       <label class="avb-toggle" for="ltpo-off"><span>禁用 LTPO/VRR 动态刷新率<span class="t-detail">防止系统锁低刷新率，重启后生效</span></span><input id="ltpo-off" type="checkbox" role="switch"></label>
     </section>
 
+    <section class="setting-section" aria-labelledby="fps-heading">
+      <div class="section-heading"><h2 id="fps-heading">帧率显示</h2><span id="fps-caption">实时 FPS</span></div>
+      <label class="avb-toggle" for="fps-show"><span>屏幕显示当前刷新率<span class="t-detail">同开发者选项"显示刷新率"，即时生效</span></span><input id="fps-show" type="checkbox" role="switch"></label>
+    </section>
+
     <section class="apply-section" aria-label="应用设置">
       <div class="selection-line"><span>当前选择</span><strong id="selection">—</strong></div>
       <button id="apply" class="apply-button" type="button" disabled><span id="apply-label">保存并应用</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
       <button id="restore" class="restore-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>恢复原厂 (DTBO + KO)</button>
     </section>
 
-    <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> v2.3.7</footer>
+    <footer>白驹过隙而已 <span>·</span> DTBO·OC <span>·</span> <span id="ver">v0</span></footer>
   </main>
   <script type="module" src="app.js"></script>
 </body>
