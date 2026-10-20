@@ -56,7 +56,8 @@
     <section class="setting-section" aria-labelledby="rate-heading">
       <div class="section-heading"><h2 id="rate-heading">超频档位</h2><span id="rates-caption">自动识别中</span></div>
       <div id="rate-tools" hidden>
-        <button id="lock-btn" class="mini-btn lock" type="button">锁定基准档位</button>
+        <select id="lockhz-select" class="lockhz-select" aria-label="全局锁定档位"></select>
+        <button id="lock-btn" class="mini-btn lock" type="button">全局锁定</button>
         <span id="lock-state" class="badge">自动调频</span>
       </div>
       <div id="rates" class="rate-grid" role="radiogroup" aria-label="选择超频档位"><div class="placeholder">正在读取可用档位…</div></div>

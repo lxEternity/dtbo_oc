@@ -171,7 +171,7 @@ async function ratectlCommand(args, okMsg) {
 
 function syncRcControls() {
   const off = rcBusy || busy;
-  ['perapp-toggle', 'lockboot-toggle'].forEach(id => { $(id).disabled = off; });
+  ['perapp-toggle', 'lockboot-toggle', 'lockhz-select', 'lock-btn'].forEach(id => { $(id).disabled = off; });
   document.querySelectorAll('#app-rows select, #app-rows button').forEach(el => { el.disabled = off; });
 }
 
@@ -284,18 +284,32 @@ function drawRatesSwitch(fragment, rc) {
   });
   const tools = $('rate-tools');
   tools.hidden = false;
+  const lockhz = Number(rc?.lockhz) || 0;
+  const gears = perappRateOptions(rc);
+  const lockSel = $('lockhz-select');
+  const keepSel = lockSel.value;
+  lockSel.replaceChildren(...gears.map(v => {
+    const o = document.createElement('option');
+    o.value = String(v);
+    o.textContent = `${v}Hz`;
+    return o;
+  }));
+  if (keepSel && gears.includes(Number(keepSel))) lockSel.value = keepSel;
+  else lockSel.value = String(lockhz || rcSel.base || gears[gears.length - 1] || '');
   const lockBtn = $('lock-btn');
-  lockBtn.textContent = pinned ? '解锁 (交还系统)' : '锁定基准档位';
-  lockBtn.classList.toggle('on', pinned);
+  lockBtn.textContent = lockhz ? `解锁 (当前 ${lockhz}Hz)` : pinned ? '解锁 (交还系统)' : '全局锁定';
+  lockBtn.classList.toggle('on', !!lockhz || pinned);
   lockBtn.onclick = () => {
-    if (pinned) releaseRate();
-    else if (rcSel.base) switchHz(rcSel.base);
-    else notify('请先在档位卡片上设置基准档。', true);
+    if (lockhz) { ratectlCommand('save lockhz=0', '已解除全局锁定。'); return; }
+    if (pinned) { releaseRate(); return; }
+    const hz = Number(lockSel.value);
+    if (!hz) { notify('请选择锁定档位。', true); return; }
+    ratectlCommand(`save lockhz=${hz}`, `已全局锁定 ${hz}Hz。`);
   };
   const lockState = $('lock-state');
-  lockState.textContent = pinned
-    ? `已锁定${rcSel.base ? ` · 基准 ${rcSel.base}Hz` : ''}${rc?.perapp === 1 ? ' · 按应用' : ''}`
-    : '自动调频';
+  lockState.textContent = lockhz
+    ? `全局锁定 ${lockhz}Hz`
+    : pinned ? `已锁定${rcSel.base ? ` · 基准 ${rcSel.base}Hz` : ''}` : '自动调频';
   $('rate-heading').textContent = '切换档位';
   $('rates-caption').textContent = `共 ${modes.length} 档${rcSel.base ? ` · 基准 ${rcSel.base}Hz` : ''}${rcDirty ? ' · 待保存' : ''}`;
 }

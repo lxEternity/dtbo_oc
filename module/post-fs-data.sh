@@ -63,8 +63,16 @@ if [ -z "$DEVICE" ]; then
 fi
 
 KO=""
-[ -f "$DATA_DIR/ko/$DEVICE.ko" ] && KO="$DATA_DIR/ko/$DEVICE.ko"
-[ -z "$KO" ] && [ -f "$MODDIR/ko/$DEVICE.ko" ] && KO="$MODDIR/ko/$DEVICE.ko"
+KO_FALLBACK=""
+for p in "$DATA_DIR/ko/$DEVICE.ko" "$MODDIR/ko/$DEVICE.ko"; do
+    [ -f "$p" ] || continue
+    [ -z "$KO_FALLBACK" ] && KO_FALLBACK="$p"
+    KV=$(strings "$p" 2>/dev/null | sed -n 's/^vermagic=//p' | head -n 1 | cut -d' ' -f1)
+    if [ -n "$KV" ] && [ "$KV" = "$(uname -r)" ]; then
+        KO="$p"; break
+    fi
+done
+[ -z "$KO" ] && [ -n "$KO_FALLBACK" ] && KO="$KO_FALLBACK"
 if [ -z "$KO" ]; then
     klog "KO方案: 本机型 ($DEVICE) 无可用 KO, 跳过"
     exit 0

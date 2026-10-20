@@ -156,6 +156,7 @@ footer{text-align:center;color:var(--footer);font-size:8.5px;letter-spacing:1px;
 .placeholder{grid-column:1/-1;color:var(--muted);font-size:11.5px;background:rgba(var(--surface-rgb),var(--card-alpha));padding:20px;border-radius:16px}
 #rate-tools{display:flex;align-items:center;gap:9px;margin-bottom:11px}
 #rate-tools .badge{font-variant-numeric:tabular-nums}
+.lockhz-select{height:30px;border:1px solid var(--line);border-radius:10px;background:rgba(var(--surface-rgb),var(--ctl-alpha));color:var(--text);font:inherit;font-size:11.5px;padding:0 4px;flex:none}
 #lock-btn{height:34px}
 .rate-grid.two-col{grid-template-columns:repeat(2,minmax(0,1fr))}
 .rate-card{border:1px solid var(--line);background:rgba(var(--surface-rgb),var(--card-alpha));border-radius:18px;padding:10px 12px 11px;position:relative}

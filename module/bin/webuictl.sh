@@ -54,12 +54,28 @@ RC_DAEMON_FAST="$MODDIR/bin/ratectl_daemon.sh"
 
 case "${1:-}" in
     apps)
-        # 优先 app_process + applist.dex 直读应用名称, 失败回退纯包名
+        # 应用列表 (含名称, applist.dex): 结果落盘缓存, 二次打开瞬时返回; 过期后台刷新
+        AP_CACHE="$DATA_DIR/applist.json"
+        if [ -s "$AP_CACHE" ]; then
+            printf '{"ok":true,"apps":'
+            cat "$AP_CACHE"
+            printf '}\n'
+            AP_AGE=$(( $(date +%s) - $(stat -c %Y "$AP_CACHE" 2>/dev/null || echo 0) ))
+            if [ "$AP_AGE" -gt 600 ]; then
+                ( OUT=$(CLASSPATH="$MODDIR/arm64/applist.dex" app_process / AppList 2>/dev/null)
+                  if [ -n "$OUT" ] && printf '%s' "$OUT" | grep -q '^\['; then
+                      printf '%s' "$OUT" > "$AP_CACHE.tmp" 2>/dev/null && mv -f "$AP_CACHE.tmp" "$AP_CACHE"
+                  fi ) >/dev/null 2>&1 &
+            fi
+            exit 0
+        fi
         OUT=$(CLASSPATH="$MODDIR/arm64/applist.dex" app_process / AppList 2>/dev/null)
         if [ -n "$OUT" ] && printf '%s' "$OUT" | grep -q '^\['; then
+            printf '%s' "$OUT" > "$AP_CACHE.tmp" 2>/dev/null && mv -f "$AP_CACHE.tmp" "$AP_CACHE"
             printf '{"ok":true,"apps":%s}\n' "$OUT"
             exit 0
         fi
+        # dex 不可用时回退纯包名 (不缓存)
         APPSLIST=$(pm list packages -3 2>/dev/null | sed 's/^package://' | sort)
         [ -n "$APPSLIST" ] || fail "无法获取应用列表"
         printf '{"ok":true,"apps":['
@@ -98,17 +114,19 @@ case "${1:-}" in
         ;;
     ratectl)
         # 仅操作 ratectl 配置文件与守护进程, 无需识别机型
-        RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_APPS=""
+        RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0; RC_APPS=""
         rc_load_fast() {
-            RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_APPS=""
+            RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0; RC_APPS=""
             [ -f "$RC_CONF_FAST" ] || return 0
             RC_BASE=$(sed -n 's/^BASE=//p' "$RC_CONF_FAST" | tail -n 1)
             RC_LADDER=$(sed -n 's/^LADDER=//p' "$RC_CONF_FAST" | tail -n 1)
             RC_PERAPP=$(sed -n 's/^PERAPP=//p' "$RC_CONF_FAST" | tail -n 1)
             RC_LOCKBOOT=$(sed -n 's/^LOCKBOOT=//p' "$RC_CONF_FAST" | tail -n 1)
+            RC_LOCKHZ=$(sed -n 's/^LOCKHZ=//p' "$RC_CONF_FAST" | tail -n 1)
             RC_APPS=$(grep '^APP:' "$RC_CONF_FAST" | cut -d: -f2-)
             [ "$RC_PERAPP" = "1" ] || RC_PERAPP=0
             [ "$RC_LOCKBOOT" = "1" ] || RC_LOCKBOOT=0
+            case "$RC_LOCKHZ" in ''|*[!0-9]*) RC_LOCKHZ=0 ;; esac
             return 0
         }
         rc_set_fast() {
@@ -131,11 +149,13 @@ case "${1:-}" in
             return 1
         }
         daemon_sync_fast() {
-            if [ "$RC_PERAPP" = "1" ] || [ "$RC_LOCKBOOT" = "1" ]; then
+            if [ "$RC_PERAPP" = "1" ] || [ "$RC_LOCKBOOT" = "1" ] || [ "$RC_LOCKHZ" != "0" ]; then
                 [ -x "$RC_DAEMON_FAST" ] || return 1
                 daemon_running_fast && return 0
                 nohup sh "$RC_DAEMON_FAST" >/dev/null 2>&1 &
-                sleep 0.3
+                sleep 0.1
+                daemon_running_fast && return 0
+                sleep 0.15
                 daemon_running_fast
             else
                 if daemon_running_fast; then kill "$(cat "$RC_PID_FAST")" 2>/dev/null; fi
@@ -144,8 +164,8 @@ case "${1:-}" in
             fi
         }
         emit_ratectl_fast() {
-            printf '"ratectl":{"base":"%s","ladder":[%s],"perapp":%s,"lockboot":%s,"daemon":%s,"apps":{' \
-                "${RC_BASE:-}" "$(echo "$RC_LADDER" | sed 's/,*$//;s/^,//')" "$RC_PERAPP" "$RC_LOCKBOOT" \
+            printf '"ratectl":{"base":"%s","ladder":[%s],"perapp":%s,"lockboot":%s,"lockhz":%s,"daemon":%s,"apps":{' \
+                "${RC_BASE:-}" "$(echo "$RC_LADDER" | sed 's/,*$//;s/^,//')" "$RC_PERAPP" "$RC_LOCKBOOT" "$RC_LOCKHZ" \
                 "$(daemon_running_fast && echo 1 || echo 0)"
             FIRST=1
             for l in $RC_APPS; do
@@ -192,6 +212,14 @@ case "${1:-}" in
                             rc_set_fast LOCKBOOT "$V"
                             RC_LOCKBOOT=$V
                             [ "$V" = "1" ] && MSG="${MSG}开机自动锁定已开启; " || MSG="${MSG}开机自动锁定已关闭; "
+                            ;;
+                        lockhz)
+                            # 全局档位锁定: >0 锁定到该档位, 0 解除
+                            case "$V" in ''|*[!0-9]*) fail "全局锁定档位无效" ;; esac
+                            [ "$V" -ge 0 ] && [ "$V" -le 300 ] || fail "全局锁定档位超出范围"
+                            rc_set_fast LOCKHZ "$V"
+                            RC_LOCKHZ=$V
+                            if [ "$V" = "0" ]; then MSG="${MSG}全局锁定已关闭; "; else MSG="${MSG}全局锁定 ${V}Hz; "; fi
                             ;;
                         *) fail "未知参数 $K" ;;
                     esac
@@ -313,9 +341,16 @@ KO_LOADED=0
 KO_INSTALLED=0
 KO_VERMATCH=""
 if [ -n "$DEVICE" ]; then
+    KO_FB=""
     for p in "$DATA_DIR/ko/$DEVICE.ko" "$MODDIR/ko/$DEVICE.ko"; do
-        if [ -f "$p" ]; then KO_FILE="$p"; KO_AVAIL=1; break; fi
+        if [ -f "$p" ]; then
+            KO_AVAIL=1
+            [ -z "$KO_FB" ] && KO_FB="$p"
+            kv=$(strings "$p" 2>/dev/null | sed -n 's/^vermagic=//p' | head -n 1 | cut -d' ' -f1)
+            if [ -n "$kv" ] && [ "$kv" = "$(uname -r)" ]; then KO_FILE="$p"; break; fi
+        fi
     done
+    [ -z "$KO_FILE" ] && [ -n "$KO_FB" ] && KO_FILE="$KO_FB"
 fi
 KO_MN=""
 if [ -n "$KO_FILE" ]; then
@@ -374,17 +409,19 @@ lic_query
 MACHINE=""
 [ -x "$TOOL" ] && MACHINE=$("$TOOL" machineid 2>/dev/null | sed -n 's/^MACHINE=//p')
 
-RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_APPS=""
+RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0; RC_APPS=""
 rc_load() {
-    RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_APPS=""
+    RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_LOCKHZ=0; RC_APPS=""
     [ -f "$RC_CONF" ] || return 0
     RC_BASE=$(sed -n 's/^BASE=//p' "$RC_CONF" | tail -n 1)
     RC_LADDER=$(sed -n 's/^LADDER=//p' "$RC_CONF" | tail -n 1)
     RC_PERAPP=$(sed -n 's/^PERAPP=//p' "$RC_CONF" | tail -n 1)
     RC_LOCKBOOT=$(sed -n 's/^LOCKBOOT=//p' "$RC_CONF" | tail -n 1)
+    RC_LOCKHZ=$(sed -n 's/^LOCKHZ=//p' "$RC_CONF" | tail -n 1)
     RC_APPS=$(grep '^APP:' "$RC_CONF" | cut -d: -f2-)
     [ "$RC_PERAPP" = "1" ] || RC_PERAPP=0
     [ "$RC_LOCKBOOT" = "1" ] || RC_LOCKBOOT=0
+    case "$RC_LOCKHZ" in ''|*[!0-9]*) RC_LOCKHZ=0 ;; esac
     return 0
 }
 rc_set() {
@@ -421,16 +458,42 @@ daemon_stop() {
     return 0
 }
 rc_daemon_sync() {
-    if [ "$RC_PERAPP" = "1" ] || [ "$RC_LOCKBOOT" = "1" ]; then
+    if [ "$RC_PERAPP" = "1" ] || [ "$RC_LOCKBOOT" = "1" ] || [ "$RC_LOCKHZ" != "0" ]; then
         daemon_start || return 1
     else
         daemon_stop
     fi
     return 0
 }
+# 钉住/恢复系统刷新率设置 (min/peak_refresh_rate): 防止系统 ADFR 与锁定档位来回拉锯
+# 备份文件格式: "<boot_id> <原min> <原peak>", "-" 表示原值为空 (恢复时删除键)
+w_pin_bak() {
+    [ -s "$DATA_DIR/ratectl.pinbak" ] && return 0
+    OMIN=$(settings --user 0 get system min_refresh_rate 2>/dev/null)
+    OPEAK=$(settings --user 0 get system peak_refresh_rate 2>/dev/null)
+    case "$OMIN" in ''|null) OMIN="-" ;; esac
+    case "$OPEAK" in ''|null) OPEAK="-" ;; esac
+    printf '%s %s %s\n' "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" "$OMIN" "$OPEAK" > "$DATA_DIR/ratectl.pinbak" 2>/dev/null
+    return 0
+}
+w_pin_hz() {
+    w_pin_bak
+    settings --user 0 put system min_refresh_rate "$1" 2>/dev/null
+    settings --user 0 put system peak_refresh_rate "$1" 2>/dev/null
+    return 0
+}
+w_pin_restore() {
+    [ -s "$DATA_DIR/ratectl.pinbak" ] || return 0
+    OMIN=$(cut -d' ' -f2 "$DATA_DIR/ratectl.pinbak" 2>/dev/null)
+    OPEAK=$(cut -d' ' -f3 "$DATA_DIR/ratectl.pinbak" 2>/dev/null)
+    if [ "$OMIN" = "-" ]; then settings --user 0 delete system min_refresh_rate 2>/dev/null; else settings --user 0 put system min_refresh_rate "$OMIN" 2>/dev/null; fi
+    if [ "$OPEAK" = "-" ]; then settings --user 0 delete system peak_refresh_rate 2>/dev/null; else settings --user 0 put system peak_refresh_rate "$OPEAK" 2>/dev/null; fi
+    rm -f "$DATA_DIR/ratectl.pinbak"
+    return 0
+}
 emit_ratectl_json() {
-    printf '"ratectl":{"base":"%s","ladder":[%s],"perapp":%s,"lockboot":%s,"daemon":%s,"apps":{' \
-        "${RC_BASE:-}" "$(echo "$RC_LADDER" | sed 's/,*$//;s/^,//')" "$RC_PERAPP" "$RC_LOCKBOOT" \
+    printf '"ratectl":{"base":"%s","ladder":[%s],"perapp":%s,"lockboot":%s,"lockhz":%s,"daemon":%s,"apps":{' \
+        "${RC_BASE:-}" "$(echo "$RC_LADDER" | sed 's/,*$//;s/^,//')" "$RC_PERAPP" "$RC_LOCKBOOT" "$RC_LOCKHZ" \
         "$(daemon_running && echo 1 || echo 0)"
     FIRST=1
     for l in $RC_APPS; do
@@ -687,6 +750,13 @@ case "${1:-}" in
                             RC_LOCKBOOT=$V
                             [ "$V" = "1" ] && MSG="${MSG}开机自动锁定已开启; " || MSG="${MSG}开机自动锁定已关闭; "
                             ;;
+                        lockhz)
+                            case "$V" in ''|*[!0-9]*) fail "全局锁定档位无效" ;; esac
+                            [ "$V" -ge 0 ] && [ "$V" -le 300 ] || fail "全局锁定档位超出范围"
+                            rc_set LOCKHZ "$V"
+                            RC_LOCKHZ=$V
+                            if [ "$V" = "0" ]; then MSG="${MSG}全局锁定已关闭; "; else MSG="${MSG}全局锁定 ${V}Hz; "; fi
+                            ;;
                         *) fail "未知参数 $K" ;;
                     esac
                 done
@@ -864,13 +934,40 @@ EOF
         sf_lock || fail "已有切换任务进行中, 请稍后重试"
         awk -F'|' -v id="$ID" '$1=="M" && $2==id {f=1} END{exit !f}' "$WORK/sf_modes.txt" || fail "所选档位不存在, 请刷新后重试"
         OLD="$SF_AID"
+        THZ=$(awk -F'|' -v id="$ID" '$1=="M"&&$2==id{print int($5+0.5)}' "$WORK/sf_modes.txt")
         if [ "$ID" = "$OLD" ]; then
+            w_pin_hz "$THZ"
             emit_result_with_sf "系统已处于所选档位"
             exit 0
         fi
         TW=$(awk -F'|' -v id="$ID" '$1=="M"&&$2==id{print $3}' "$WORK/sf_modes.txt")
         TH=$(awk -F'|' -v id="$ID" '$1=="M"&&$2==id{print $4}' "$WORK/sf_modes.txt")
         THZ=$(awk -F'|' -v id="$ID" '$1=="M"&&$2==id{print int($5+0.5)}' "$WORK/sf_modes.txt")
+        # 星驰式双向阶梯: 目标档与当前档之间逐级步进 (升/降均走), 50ms 间隔
+        CURHZ=$(awk -F'|' '$1=="A"{print int($5+0.5)}' "$WORK/sf_modes.txt")
+        if [ -n "$RC_LADDER" ] && [ -n "$CURHZ" ] && [ "$CURHZ" != "$THZ" ]; then
+            AGRP2=$(awk -F'|' '$1=="A"{print $6}' "$WORK/sf_modes.txt")
+            LADS=$(echo "$RC_LADDER" | tr ',' ' ')
+            if [ "$CURHZ" -lt "$THZ" ]; then
+                LORDER=$(echo "$LADS" | tr ' ' '\n' | sort -n | tr '\n' ' ')
+            else
+                LORDER=$(echo "$LADS" | tr ' ' '\n' | sort -rn | tr '\n' ' ')
+            fi
+            for L in $LORDER; do
+                case "$L" in ''|*[!0-9]*) continue ;; esac
+                if [ "$CURHZ" -lt "$THZ" ]; then
+                    [ "$L" -le "$CURHZ" ] && continue
+                    [ "$L" -lt "$THZ" ] || continue
+                else
+                    [ "$L" -ge "$CURHZ" ] && continue
+                    [ "$L" -gt "$THZ" ] || continue
+                fi
+                LID=$(awk -F'|' -v hz="$L" -v g="$AGRP2" '$1=="M" && int($5+0.5)==hz && $6==g {print $2; exit}' "$WORK/sf_modes.txt")
+                [ -n "$LID" ] || continue
+                sf_send "$LID"
+                usleep 50000 2>/dev/null || sleep 0.05
+            done
+        fi
         sf_send "$ID" || fail "切换指令发送失败 (本机系统可能不支持在线切换)"
         OK=0
         TRY=0
@@ -890,6 +987,7 @@ EOF
             fail "系统未确认所选档位, 已请求还原并交还系统自动切换"
         fi
         printf '%s %s\n' "$(sf_boot_id)" "$ID" > "$SF_PIN"
+        w_pin_hz "$THZ"
         emit_result_with_sf "已切换并经系统确认; 系统自动调频已暂停, 点交还可恢复"
         ;;
     release)
@@ -897,11 +995,18 @@ EOF
         sf_lock || fail "已有切换任务进行中, 请稍后重试"
         sf_send -1 || fail "交还指令发送失败 (本机系统可能不支持)"
         rm -f "$SF_PIN"
-        if [ -f "$RC_CONF" ] && [ "$RC_LOCKBOOT" = "1" ]; then
-            rc_set LOCKBOOT 0
-            RC_LOCKBOOT=0
+        if [ -f "$RC_CONF" ]; then
+            if [ "$RC_LOCKBOOT" = "1" ]; then
+                rc_set LOCKBOOT 0
+                RC_LOCKBOOT=0
+            fi
+            if [ "$RC_LOCKHZ" != "0" ]; then
+                rc_set LOCKHZ 0
+                RC_LOCKHZ=0
+            fi
             rc_daemon_sync
         fi
+        w_pin_restore
         sleep 0.4
         sf_capture 2>/dev/null
         emit_result_with_sf "已交还系统自动切换; 若停留在低档位, 亮屏点按屏幕即可恢复调频"

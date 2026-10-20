@@ -155,6 +155,13 @@ fi
 
 KO_AVAIL=0
 if [ -n "$DEVICE" ]; then
+    # 升级清理: 模块已内置本机型 KO 时, 删除 DATA_DIR 同名旧缓存
+    # (旧 vermagic 缓存优先级高于模块内置, 会一直报内核不匹配)
+    if [ -f "$MODPATH/ko/$DEVICE.ko" ] && [ -f "$DATA_DIR/ko/$DEVICE.ko" ] \
+        && ! cmp -s "$MODPATH/ko/$DEVICE.ko" "$DATA_DIR/ko/$DEVICE.ko"; then
+        rm -f "$DATA_DIR/ko/$DEVICE.ko"
+        ui_print "- 已清理旧版缓存 KO ($DEVICE.ko)"
+    fi
     for p in "$DATA_DIR/ko/$DEVICE.ko" "$MODPATH/ko/$DEVICE.ko"; do
         [ -f "$p" ] && KO_AVAIL=1 && break
     done

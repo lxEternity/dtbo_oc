@@ -74,11 +74,16 @@ fi
 log "dtbo 分区: $DTBO (slot=$SLOT)"
 
 ko_find() {
-    if [ -f "$DATA_DIR/ko/$DEVICE.ko" ]; then
-        echo "$DATA_DIR/ko/$DEVICE.ko"
-    elif [ -f "$MODDIR/ko/$DEVICE.ko" ]; then
-        echo "$MODDIR/ko/$DEVICE.ko"
-    fi
+    local p kv fb=""
+    for p in "$DATA_DIR/ko/$DEVICE.ko" "$MODDIR/ko/$DEVICE.ko"; do
+        [ -f "$p" ] || continue
+        [ -z "$fb" ] && fb="$p"
+        kv=$(strings "$p" 2>/dev/null | sed -n 's/^vermagic=//p' | head -n 1 | cut -d' ' -f1)
+        if [ -n "$kv" ] && [ "$kv" = "$(uname -r)" ]; then
+            echo "$p"; return 0
+        fi
+    done
+    [ -n "$fb" ] && echo "$fb"
 }
 
 ko_modname() {

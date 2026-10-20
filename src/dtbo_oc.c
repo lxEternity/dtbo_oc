@@ -2662,6 +2662,7 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     int has_sa = 0, has_oa = 0, has_raw = 0, has_wqhd_oplus = 0, has_oplus_fhd = 0;
     int has_fhd_sdc = 0, has_wqhd_sdc = 0, has_sdc_fhd = 0;
     int has_mtk_timing = 0;     /* MTK 时序指纹 (oplus,dsi-panel-framerate / mtk,skip_vblank) */
+    int has_aa618 = 0;          /* ACE6 至尊版 AA618 面板节点名 (PMB110/MT6993) */
     int proj_60c8 = 0, msm_2e7 = 0;  /* GT7P 竞速版 Canoe: project-id 主项 0x60c8 / msm-id 含 0x2e7 */
     uint32_t max_rate = 0, max_rate_dyn = 0;
     uint32_t max_sa_fhd = 0;   /* gt7p: sa_fhd 家族最高档 (含动态节点, AE035 全动态) */
@@ -2694,6 +2695,7 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
            仅能靠 project-id (0x60c8 vs 0x6030) 与 msm-id (SM8875 条目) 区分 */
         for (int li = 0; li < d.n && !(proj_60c8 && msm_2e7); li++) {
             const char *l = d.lines[li];
+            if (!has_aa618 && strstr(l, "panel_aa618")) has_aa618 = 1;
             if (!proj_60c8 && strstr(l, "oplus,project-id")) {
                 const char *p = strchr(l, '<');
                 if (p) {
@@ -2753,8 +2755,13 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
         }
     }
     if (!strcmp(code, "unknown")) {
-        /* 家族指纹兜底 (旧机型: 无 codename 表条目) */
-        if (has_mtk_timing && (has_sa || has_oa)) { code = "ace6u"; name = "一加 ACE6 至尊版"; }
+        /* 家族指纹兜底 (旧机型: 无 codename 表条目)。
+           严格隔离原则: 每个指纹只绑定已实机确认的机型组合, 不得横向扩大。
+           ACE6 至尊版 (PMB110/MT6993): model 行仅 "MT6993" 无 codename,
+           实机 DTBO 为 panel_aa618_* 面板 + timing@sa_fhd_30..165 + MTK 属性;
+           仅 AA618 面板名或 sa/oa 家族 + MTK 属性判 ace6u,
+           sdc/wqhd 等其他家族即使出现在 MTK 平台也不认 (留给未来机型精确登记) */
+        if (has_mtk_timing && (has_aa618 || has_sa || has_oa)) { code = "ace6u"; name = "一加 ACE6 至尊版"; }
         else if (has_sa || has_oa || has_raw) { code = "ace2pro"; name = "一加 ACE2Pro"; batt_mod = 1; }
         else if (has_wqhd_oplus) { code = "op13"; name = "一加 13"; }
         else if (has_oplus_fhd) { code = "op15"; name = "一加 15"; }
