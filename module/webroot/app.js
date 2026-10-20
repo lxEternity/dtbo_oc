@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { exec } from './vendor/kernelsu.js';
 
 const $ = id => document.getElementById(id);
@@ -297,7 +296,6 @@ function drawRatesSwitch(fragment, rc) {
     ? `已锁定${rcSel.base ? ` · 基准 ${rcSel.base}Hz` : ''}${rc?.perapp === 1 ? ' · 按应用' : ''}`
     : '自动调频';
   $('rate-heading').textContent = '切换档位';
-  $('rate-hint').textContent = '点击档位即时切换 (需亮屏); 「设为基准」设为逐级升挡的起点档; 超频档点亮「超频」加入切换序列, 顺序即升挡次序; 修改后点底部「保存切换配置」生效。锁定后档位由策略自动接管, 点「解锁」交还系统。';
   $('rates-caption').textContent = `共 ${modes.length} 档${rcSel.base ? ` · 基准 ${rcSel.base}Hz` : ''}${rcDirty ? ' · 待保存' : ''}`;
 }
 
@@ -322,7 +320,6 @@ function drawRates() {
   $('rates').classList.remove('two-col');
   $('rate-tools').hidden = true;
   $('rate-heading').textContent = '超频档位';
-  $('rate-hint').textContent = '灰色为原厂档位 (仅展示); 选择任一超频档位即生成全部超频档位, 原厂已有档位自动跳过。';
   if (!state?.oc_capable) {
     sel.hz = 0;
     $('rates-caption').textContent = '本机型不支持超频';
@@ -395,7 +392,8 @@ function drawPerapp() {
     const hz = Number(appMap[pkg]) || baseHz || opts[0] || 120;
     const row = document.createElement('div');
     row.className = 'app-row';
-    const name = span('app-name', pkg);
+    const name = span('app-name', appNames[pkg] || pkg);
+    if (appNames[pkg] && appNames[pkg] !== pkg) name.append(span('app-pkg-sm', pkg));
     row.append(name);
     const select = document.createElement('select');
     select.className = 'app-hz';
@@ -452,7 +450,6 @@ function drawBatts() {
   });
   $('batts').replaceChildren(fragment);
   $('batt-caption').textContent = `${options.length} 个方案`;
-  $('batt-hint').hidden = !state?.batt_capable;
 }
 
 function drawModes() {
@@ -703,6 +700,7 @@ $('lockboot-toggle').addEventListener('change', () => {
     $('lockboot-toggle').checked ? '开机自动锁定已开启。' : '开机自动锁定已关闭。');
 });
 let apTimer = 0;
+const appNames = {};
 async function openAppPicker() {
   if (apBusy) return;
   apBusy = true;
@@ -713,10 +711,13 @@ async function openAppPicker() {
   $('ap-search').value = '';
   try {
     const result = await command('apps', 60000);
-    const all = Array.isArray(result.apps) ? result.apps : [];
+    const all = (Array.isArray(result.apps) ? result.apps : [])
+      .map(a => (typeof a === 'string' ? { p: a, n: a } : a))
+      .filter(a => a && a.p);
+    all.forEach(a => { appNames[a.p] = a.n || a.p; });
     const rc = state?.ratectl || {};
     const appMap = rc.apps && typeof rc.apps === 'object' ? rc.apps : {};
-    const avail = all.filter(p => !(p in appMap));
+    const avail = all.filter(a => !(a.p in appMap));
     renderApList(avail, '');
     $('ap-search').oninput = () => {
       clearTimeout(apTimer);
@@ -730,21 +731,24 @@ async function openAppPicker() {
 }
 function renderApList(avail, kw) {
   const list = $('ap-list');
-  const items = kw ? avail.filter(p => p.toLowerCase().includes(kw)) : avail;
+  const items = kw ? avail.filter(a =>
+    a.p.toLowerCase().includes(kw) || (a.n || '').toLowerCase().includes(kw)) : avail;
   const frag = document.createDocumentFragment();
   const rc = state?.ratectl || {};
   const ladder = Array.isArray(rc.ladder) ? rc.ladder : [];
   const baseHz = Number(rc.base) || 120;
   const opts = perappRateOptions(rc);
   const defHz = opts.length ? opts[opts.length - 1] : baseHz;
-  items.slice(0, 300).forEach(pkg => {
+  items.slice(0, 300).forEach(a => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'ap-item';
-    btn.textContent = pkg;
+    const name = span('ap-name', a.n || a.p);
+    const pkg = span('ap-pkg', a.p);
+    btn.append(name, pkg);
     btn.addEventListener('click', () => {
       $('app-picker').hidden = true;
-      ratectlCommand(`app set ${pkg} ${defHz}`, `已添加 ${pkg} -> ${defHz}Hz, 可在名单中调整档位。`);
+      ratectlCommand(`app set ${a.p} ${defHz}`, `已添加 ${a.n || a.p} -> ${defHz}Hz, 可在名单中调整档位。`);
     });
     frag.append(btn);
   });

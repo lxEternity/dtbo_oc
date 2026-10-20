@@ -1,6 +1,5 @@
 #!/system/bin/sh
 SKIPUNZIP=0
-
 command -v ui_print >/dev/null 2>&1 || ui_print() { echo "$1"; }
 command -v abort >/dev/null 2>&1 || abort() { ui_print "$1"; exit 1; }
 command -v getprop >/dev/null 2>&1 || getprop() {
@@ -9,13 +8,11 @@ command -v getprop >/dev/null 2>&1 || getprop() {
         *) return 0 ;;
     esac
 }
-
 ARCH64=$(getprop ro.product.cpu.abi)
 if [ "$ARCH64" != "arm64-v8a" ]; then
     ui_print "! 本模块仅支持 arm64 设备 (当前: $ARCH64)"
     abort
 fi
-
 ui_print "*******************************"
 ui_print " 超频解容模块 (多机型) v2.3.7"
 ui_print "*******************************"
@@ -26,21 +23,18 @@ DTC="$MODPATH/arm64/dtc"
 chmod 755 "$TOOL" "$DTC" \
     "$MODPATH/service.sh" "$MODPATH/menu.sh" "$MODPATH/post-fs-data.sh" "$MODPATH/bin/webuictl.sh" 2>/dev/null
 mkdir -p "$MODPATH/bin" "$MODPATH/ko" 2>/dev/null
-
 "$TOOL" >/dev/null 2>&1; BINRC=$?
 if [ "$BINRC" -ge 126 ]; then
     ui_print "! dtbo_oc 二进制无法执行 (rc=$BINRC)"
     ui_print "! 无法进行QQ群验证, 中止安装"
     abort
 fi
-
 DATA_DIR=/data/adb/dtbo_oc
 WORK="$DATA_DIR/work"
 STOCK="$DATA_DIR/dtbo_stock.img"
 CONFIG="$DATA_DIR/config"
 LOG="$DATA_DIR/install.log"
 mkdir -p "$DATA_DIR" "$WORK" "$DATA_DIR/ko"
-
 LICOUT=$("$TOOL" license 2>/dev/null)
 case "$LICOUT" in
     LICENSE=ok*)
@@ -76,7 +70,6 @@ case "$LICOUT" in
         fi
         ;;
 esac
-
 SLOT=$(getprop ro.boot.slot_suffix)
 DTBO=""
 for d in /dev/block/by-name /dev/block/bootdevice/by-name /dev/block/soc/by-name; do
@@ -104,7 +97,6 @@ else
         ui_print "- 沿用已有原始镜像基准 (dtbo_stock.img)"
     fi
 fi
-
 DEVICE=""; DEVNAME=""
 if [ -f "$STOCK" ]; then
     IDINFO=$("$TOOL" identify --img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>/dev/null)
@@ -116,7 +108,6 @@ if [ -f "$STOCK" ]; then
     STRIP=$(echo "$IDINFO" | grep '^STRIP_ABOVE=' | cut -d= -f2)
 fi
 [ -z "$STRIP" ] && STRIP=0
-
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
 CHOICES=""
@@ -152,7 +143,6 @@ fi
 if [ "$DEVICE" = "gt7p2" ]; then
     ui_print "- 本机型 AC180 面板原厂 120Hz, 可超频至 144"
 fi
-
 KO_AVAIL=0
 if [ -n "$DEVICE" ]; then
     for p in "$DATA_DIR/ko/$DEVICE.ko" "$MODPATH/ko/$DEVICE.ko"; do
@@ -165,16 +155,13 @@ else
     ui_print "- 未找到本机型 KO ($DEVICE.ko), KO 挂载方案暂不可用"
     ui_print "  (放入 /data/adb/dtbo_oc/ko/ 后即可在 WebUI 选择)"
 fi
-
 HAVE_KEYS=0
 [ -x "$TOOL" ] && HAVE_KEYS=1
 HAVE_GETEVENT=0
 command -v getevent >/dev/null 2>&1 && HAVE_GETEVENT=1
 KEY_TIMEOUT=60
 command -v timeout >/dev/null 2>&1 || KEY_TIMEOUT=0
-
 wake_screen() { command -v input >/dev/null 2>&1 && input keyevent 224 2>/dev/null; return 0; }
-
 wait_key() {
     if [ "$HAVE_KEYS" = "1" ]; then
         if [ "$KEY_TIMEOUT" -gt 0 ] 2>/dev/null; then
@@ -200,7 +187,6 @@ wait_key() {
         esac
     done
 }
-
 ui_choose() {
     TITLE="$1"; OPTSTR="$2"; SEL="${3:-0}"
     OLDIFS="$IFS"; IFS='|'; set -- $OPTSTR; IFS="$OLDIFS"
@@ -237,7 +223,6 @@ ui_choose() {
     for o in "$@"; do [ "$i" = "$SEL" ] && SEL_TEXT="$o"; i=$((i+1)); done
     ui_print "  已选择: $SEL_TEXT"
 }
-
 HZ_CHOICE=""; BATTERY=""; OC_MODE=""; LTPO_OFF=""
 PRESET=0
 if [ -f /sdcard/dtbo_oc.conf ]; then
@@ -251,11 +236,9 @@ if [ -f "$CONFIG" ]; then
     [ -z "$OC_MODE" ] && OC_MODE=$(grep '^OC_MODE=' "$CONFIG" 2>/dev/null | cut -d= -f2)
     [ -z "$LTPO_OFF" ] && LTPO_OFF=$(grep '^LTPO_OFF=' "$CONFIG" 2>/dev/null | cut -d= -f2)
 fi
-
 if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" ]; }; then
     ui_print " "
     ui_print "- 请用 [音量+/音量-] 切换选项, [电源键] 确认"
-
     MODE_INIT=0
     [ "${OC_MODE:-dtbo}" = "ko" ] && MODE_INIT=1
     if [ "$KO_AVAIL" != "1" ]; then MODE_INIT=0; fi
@@ -273,7 +256,6 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
         OC_MODE=dtbo
         ui_print "- 本机型暂无可用 KO, 超频方案: DTBO 补丁"
     fi
-
     if [ -n "$CHOICES" ] && [ "$OC_OK" = "1" ]; then
         OPTSTR=""; INIT=0; i=0
         for c in $(echo "$CHOICES" | tr '/' ' '); do
@@ -294,7 +276,6 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
         ui_print "- 本机型不支持刷新率超频, 跳过档位选择"
         HZ_CHOICE=0
     fi
-
     if [ "$OC_MODE" = "ko" ]; then
         BATTERY=0
         ui_print "- KO 方案不修改 DTBO, 电池/充电方案不可用"
@@ -322,12 +303,10 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
             i=$((i+1))
         done
     fi
-
     if [ "$BATT_OK" = "1" ] && { [ "$BATTERY" = "3" ] || [ "$BATTERY" = "4" ]; }; then
         ui_choose "确认: 设备是否已更换 6100mAh 魔改电池?" "否, 改回原版电池|是, 确认已更换" 0
         [ "$SEL" = "0" ] && { BATTERY=0; ui_print "- 已改回原版电池"; }
     fi
-
     LTPO_INIT=0
     [ "${LTPO_OFF:-0}" = "1" ] && LTPO_INIT=1
     ui_choose "禁用 LTPO 动态刷新率 (防止系统自动降档锁 60Hz):" "保持默认 (保留 LTPO/VRR 自适应)|禁用 (超频档位更稳定, 可能略增耗电)" "$LTPO_INIT"
@@ -337,7 +316,6 @@ elif [ "$PRESET" != "1" ]; then
     if [ -z "$CHOICES" ] || [ "$OC_OK" != "1" ]; then HZ_CHOICE=0; fi
     [ "$KO_AVAIL" != "1" ] && [ "${OC_MODE:-dtbo}" = "ko" ] && OC_MODE=dtbo
 fi
-
 if [ "$OC_OK" = "1" ] && [ -n "$CHOICES" ]; then
     VALID=0
     [ "$HZ_CHOICE" = "0" ] && VALID=1
@@ -349,7 +327,6 @@ if [ "$OC_OK" = "1" ] && [ -n "$CHOICES" ]; then
 else
     HZ_CHOICE=0
 fi
-
 [ -z "$BATTERY" ] && BATTERY=0
 case "$BATTERY" in 0|1|2|3|4|5|6) ;; *) BATTERY=0 ;; esac
 [ -z "$OC_MODE" ] && OC_MODE=dtbo
@@ -370,7 +347,6 @@ if [ "$OC_MODE" = "ko" ] && [ "$BATTERY" != "0" ]; then
 fi
 [ -z "$LTPO_OFF" ] && LTPO_OFF=0
 case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
-
 if [ "$BATT_OK" != "1" ]; then
     case "$BATTERY" in
         3|4)
@@ -405,7 +381,6 @@ case "$BATTERY" in
         ui_print "- 已选择: 解除充电限流 (电池参数保持原版)"
         ;;
 esac
-
 cat > "$CONFIG" <<EOF
 HZ_CHOICE=$HZ_CHOICE
 BATTERY=$BATTERY
@@ -416,7 +391,6 @@ BACKUP_PATH=/sdcard/dtbo_backup.img
 DTBO_PATH=
 EOF
 rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
-
 if [ "$OC_MODE" = "ko" ]; then
     ui_print "- 方案: KO 内核挂载, 档位 ${HZ_CHOICE}Hz (不修改任何分区)"
 else
@@ -432,7 +406,6 @@ if [ "$LTPO_OFF" = "1" ]; then
 else
     ui_print "- LTPO 动态刷新率: 保持默认"
 fi
-
 ui_print " "
 ui_print "- v2.3.7 QQ群验证+主板ID绑定, WebUI 主题定制"
 ui_print "  (未入群将打开QQ群卡片并阻止刷入; 已验证授权30天)"

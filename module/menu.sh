@@ -7,10 +7,8 @@ DATA_DIR=/data/adb/dtbo_oc
 CONFIG="$DATA_DIR/config"
 STOCK="$DATA_DIR/dtbo_stock.img"
 WORK="$DATA_DIR/work"
-
 chmod 755 "$TOOL" "$DTC" 2>/dev/null
 mkdir -p "$DATA_DIR" "$WORK"
-
 if [ "$(id -u)" != "0" ]; then
     echo "请以 root 运行: su -c sh $0"
     exit 1
@@ -20,7 +18,6 @@ if [ ! -f "$STOCK" ]; then
     echo "       请先安装模块并重启一次 (开机自动生成)"
     exit 1
 fi
-
 IDINFO=$("$TOOL" identify --img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>/dev/null)
 DEVICE=$(echo "$IDINFO" | grep '^DEVICE=' | cut -d= -f2)
 DEVNAME=$(echo "$IDINFO" | grep '^NAME=' | cut -d= -f2)
@@ -50,7 +47,6 @@ case "$DEVICE" in
     op11)      CHOICES="" ;;
     *) echo "[错误] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
-
 HZ_CHOICE=""; BATTERY=""; OC_MODE=""; LTPO_OFF=""
 [ -f "$CONFIG" ] && . "$CONFIG"
 [ -z "$HZ_CHOICE" ] && HZ_CHOICE=144
@@ -59,12 +55,10 @@ HZ_CHOICE=""; BATTERY=""; OC_MODE=""; LTPO_OFF=""
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
 [ -z "$LTPO_OFF" ] && LTPO_OFF=0
 case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
-
 KO_AVAIL=0
 for p in "$DATA_DIR/ko/$DEVICE.ko" "$MODDIR/ko/$DEVICE.ko"; do
     [ -f "$p" ] && KO_AVAIL=1 && break
 done
-
 HAVE_KEYS=0
 [ -x "$TOOL" ] && HAVE_KEYS=1
 HAVE_GETEVENT=0
@@ -76,9 +70,7 @@ else
     FOOT="  [1]上  [2]下  [3]确认"
     TIPS=" 操作: [1]上 [2]下 [3]确认 (本机不支持按键监听, 数字键模式)"
 fi
-
 wake_screen() { command -v input >/dev/null 2>&1 && input keyevent 224 2>/dev/null; return 0; }
-
 wait_key() {
     if [ "$HAVE_KEYS" = "1" ]; then
         K=$("$TOOL" keys 2>/dev/null) && { [ "$K" = "select" ] && wake_screen; echo "$K"; return 0; }
@@ -105,7 +97,6 @@ wait_key() {
         *) wake_screen; echo select ;;
     esac
 }
-
 choose() {
     TITLE="$1"; OPTSTR="$2"; SEL="${3:-0}"
     OLDIFS="$IFS"; IFS='|'; set -- $OPTSTR; IFS="$OLDIFS"
@@ -160,13 +151,11 @@ choose() {
     for o in "$@"; do [ "$i" = "$SEL" ] && SEL_TEXT="$o"; i=$((i+1)); done
     printf "  已选择: %s\n" "$SEL_TEXT"
 }
-
 echo "=============================================="
 echo " 超频解容模块 v2.3.7 — 配置菜单"
 echo " 机型: $DEVNAME ($DEVICE)"
 echo "$TIPS"
 echo "=============================================="
-
 LICOUT=$("$TOOL" license 2>/dev/null)
 case "$LICOUT" in
     LICENSE=ok*)
@@ -207,7 +196,6 @@ case "$LICOUT" in
         fi
         ;;
 esac
-
 MODE_INIT=0
 [ "$OC_MODE" = "ko" ] && MODE_INIT=1
 if [ "$KO_AVAIL" != "1" ]; then MODE_INIT=0; fi
@@ -221,7 +209,6 @@ else
     OC_MODE=dtbo
     echo " 本机型暂无可用 KO, 超频方案: DTBO 补丁"
 fi
-
 if [ -n "$CHOICES" ] && [ "$OC_OK" = "1" ]; then
     OPTSTR=""; INIT=0; i=0
     for c in $CHOICES; do
@@ -239,7 +226,6 @@ else
     echo " 本机型不支持刷新率超频 (仅电池/充电方案)"
     HZ_CHOICE=0
 fi
-
 if [ "$OC_MODE" = "ko" ]; then
     BATTERY=0
     echo " KO 方案不修改 DTBO, 电池/充电方案不可用"
@@ -271,12 +257,10 @@ if [ "$BATT_OK" = "1" ] && { [ "$BATTERY" = "3" ] || [ "$BATTERY" = "4" ]; }; th
     choose "确认: 设备是否已更换 6100mAh 魔改电池?" "否, 改回原版电池|是, 确认已更换" 0
     [ "$SEL" = "0" ] && BATTERY=0
 fi
-
 LTPO_INIT=0
 [ "$LTPO_OFF" = "1" ] && LTPO_INIT=1
 choose "禁用 LTPO 动态刷新率 (防止系统自动降档锁 60Hz):" "保持默认 (保留 LTPO/VRR 自适应)|禁用 (超频档位更稳定, 可能略增耗电)" "$LTPO_INIT"
 LTPO_OFF=$([ "$SEL" = "1" ] && echo 1 || echo 0)
-
 echo ""
 echo "=============================================="
 echo " 方案确认"
@@ -308,7 +292,6 @@ esac
 echo "=============================================="
 choose "应用方式:" "稍后 (下次开机自动处理)|立即刷入 (重启后生效)" 0
 APPLY=$SEL
-
 if [ -f "$CONFIG" ]; then
     sed -i "s/^HZ_CHOICE=.*/HZ_CHOICE=$HZ_CHOICE/;s/^BATTERY=.*/BATTERY=$BATTERY/;s/^OC_MODE=.*/OC_MODE=$OC_MODE/;s/^LTPO_OFF=.*/LTPO_OFF=$LTPO_OFF/" "$CONFIG" 2>/dev/null || {
         cat > "$CONFIG" <<EOF
@@ -332,7 +315,6 @@ fi
 if [ "$OC_MODE" = "dtbo" ]; then
     rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
 fi
-
 if command -v resetprop >/dev/null 2>&1; then
     if [ "$LTPO_OFF" = "1" ]; then
         resetprop -n persist.oplus.display.vrr 0
@@ -354,7 +336,6 @@ if command -v resetprop >/dev/null 2>&1; then
         echo "LTPO 已恢复默认 (已即时应用)"
     fi
 fi
-
 echo ""
 echo "配置已保存: HZ_CHOICE=$HZ_CHOICE BATTERY=$BATTERY OC_MODE=$OC_MODE LTPO_OFF=$LTPO_OFF"
 echo ""

@@ -17,21 +17,18 @@ SF_OWNS_LOCK=0
 RC_CONF="$DATA_DIR/ratectl"
 RC_PID="$DATA_DIR/ratectl.pid"
 RC_DAEMON="$MODDIR/bin/ratectl_daemon.sh"
-
 json_string() {
     awk 'BEGIN{printf "\""} {if(NR>1) printf "\\n";
         gsub(/\\/,"\\\\"); gsub(/\"/,"\\\"");
         gsub(/\t/,"\\t"); gsub(/\r/,"\\r"); printf "%s",$0}
         END{printf "\""}'
 }
-
 fail() {
     printf '{"ok":false,"message":'
     printf '%s' "$1" | json_string
     printf '}\n'
     exit 1
 }
-
 cleanup() {
     if [ "$SF_OWNS_LOCK" = 1 ]; then
         rm -f "$SF_LOCK/pid"
@@ -42,11 +39,189 @@ cleanup() {
 trap cleanup 0
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
 [ "$(id -u)" = "0" ] || fail "需要 root 权限"
 mkdir -p "$DATA_DIR" "$WORK" "$WORK/ko"
 chmod 755 "$TOOL" "$DTC" 2>/dev/null
-
+RC_CONF_FAST="$DATA_DIR/ratectl"
+RC_PID_FAST="$DATA_DIR/ratectl.pid"
+RC_DAEMON_FAST="$MODDIR/bin/ratectl_daemon.sh"
+case "${1:-}" in
+    apps)
+        OUT=$(CLASSPATH="$MODDIR/arm64/applist.dex" app_process / AppList 2>/dev/null)
+        if [ -n "$OUT" ] && printf '%s' "$OUT" | grep -q '^\['; then
+            printf '{"ok":true,"apps":%s}\n' "$OUT"
+            exit 0
+        fi
+        APPSLIST=$(pm list packages -3 2>/dev/null | sed 's/^package://' | sort)
+        [ -n "$APPSLIST" ] || fail "无法获取应用列表"
+        printf '{"ok":true,"apps":['
+        FIRST=1
+        for p in $APPSLIST; do
+            case "$p" in *[\"\\]*) continue ;; esac
+            [ "$FIRST" = "1" ] || printf ','
+            printf '{"p":"%s","n":"%s"}' "$p" "$p"
+            FIRST=0
+        done
+        printf ']}\n'
+        exit 0
+        ;;
+    fps)
+        ACT="${2:-}"
+        case "$ACT" in
+            on)  settings --user 0 put system show_refresh_rate 1 ;;
+            off) settings --user 0 put system show_refresh_rate 0 ;;
+            *) fail "用法: fps on|off" ;;
+        esac
+        FPS_SHOW=0
+        GETV=$(settings --user 0 get system show_refresh_rate 2>/dev/null)
+        case "$GETV" in 1|1.0|true) FPS_SHOW=1 ;; esac
+        if [ "$ACT" = "on" ] && [ "$FPS_SHOW" != "1" ]; then
+            settings put system show_refresh_rate 1 2>/dev/null
+            GETV=$(settings --user 0 get system show_refresh_rate 2>/dev/null)
+            case "$GETV" in 1|1.0|true) FPS_SHOW=1 ;; esac
+        fi
+        MSG=$([ "$FPS_SHOW" = "1" ] && echo "帧率显示已开启 (开发者选项-显示刷新率)" || echo "帧率显示已关闭")
+        printf '{"ok":true,"fps_show":%s,"message":' "$FPS_SHOW"
+        printf '%s' "$MSG" | json_string
+        printf '}\n'
+        exit 0
+        ;;
+    ratectl)
+        RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_APPS=""
+        rc_load_fast() {
+            RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_APPS=""
+            [ -f "$RC_CONF_FAST" ] || return 0
+            RC_BASE=$(sed -n 's/^BASE=//p' "$RC_CONF_FAST" | tail -n 1)
+            RC_LADDER=$(sed -n 's/^LADDER=//p' "$RC_CONF_FAST" | tail -n 1)
+            RC_PERAPP=$(sed -n 's/^PERAPP=//p' "$RC_CONF_FAST" | tail -n 1)
+            RC_LOCKBOOT=$(sed -n 's/^LOCKBOOT=//p' "$RC_CONF_FAST" | tail -n 1)
+            RC_APPS=$(grep '^APP:' "$RC_CONF_FAST" | cut -d: -f2-)
+            [ "$RC_PERAPP" = "1" ] || RC_PERAPP=0
+            [ "$RC_LOCKBOOT" = "1" ] || RC_LOCKBOOT=0
+            return 0
+        }
+        rc_set_fast() {
+            sed -i "s|^$1=.*|$1=$2|" "$RC_CONF_FAST" 2>/dev/null
+            grep -q "^$1=" "$RC_CONF_FAST" 2>/dev/null || echo "$1=$2" >> "$RC_CONF_FAST"
+        }
+        rc_app_set_fast() {
+            sed -i "\|^APP:$1=|d" "$RC_CONF_FAST" 2>/dev/null
+            echo "APP:$1=$2" >> "$RC_CONF_FAST"
+        }
+        rc_app_del_fast() {
+            sed -i "\|^APP:$1=|d" "$RC_CONF_FAST" 2>/dev/null
+        }
+        daemon_running_fast() {
+            [ -f "$RC_PID_FAST" ] || return 1
+            DP=$(cat "$RC_PID_FAST" 2>/dev/null)
+            [ -n "$DP" ] || { rm -f "$RC_PID_FAST"; return 1; }
+            kill -0 "$DP" 2>/dev/null && return 0
+            rm -f "$RC_PID_FAST"
+            return 1
+        }
+        daemon_sync_fast() {
+            if [ "$RC_PERAPP" = "1" ] || [ "$RC_LOCKBOOT" = "1" ]; then
+                [ -x "$RC_DAEMON_FAST" ] || return 1
+                daemon_running_fast && return 0
+                nohup sh "$RC_DAEMON_FAST" >/dev/null 2>&1 &
+                sleep 0.3
+                daemon_running_fast
+            else
+                if daemon_running_fast; then kill "$(cat "$RC_PID_FAST")" 2>/dev/null; fi
+                rm -f "$RC_PID_FAST"
+                return 0
+            fi
+        }
+        emit_ratectl_fast() {
+            printf '"ratectl":{"base":"%s","ladder":[%s],"perapp":%s,"lockboot":%s,"daemon":%s,"apps":{' \
+                "${RC_BASE:-}" "$(echo "$RC_LADDER" | sed 's/,*$//;s/^,//')" "$RC_PERAPP" "$RC_LOCKBOOT" \
+                "$(daemon_running_fast && echo 1 || echo 0)"
+            FIRST=1
+            for l in $RC_APPS; do
+                P=${l%%=*}; V=${l#*=}
+                case "$P$V" in *[\"\\]*) continue ;; esac
+                [ "$FIRST" = "1" ] || printf ','
+                printf '"%s":%s' "$P" "$V"
+                FIRST=0
+            done
+            printf '}}'
+        }
+        shift
+        SUB="${1:-}"
+        shift 2>/dev/null
+        rc_load_fast
+        case "$SUB" in
+            save)
+                MSG=""
+                for kv in "$@"; do
+                    K=${kv%%=*}; V=${kv#*=}
+                    case "$K" in
+                        base)
+                            case "$V" in ''|*[!0-9]*) fail "基准档位无效" ;; esac
+                            [ "$V" -ge 30 ] && [ "$V" -le 300 ] || fail "基准档位超出范围"
+                            rc_set_fast BASE "$V"
+                            RC_BASE=$V
+                            MSG="${MSG}基准 ${V}Hz; "
+                            ;;
+                        ladder)
+                            case "$V" in ''|*[!0-9,]*) fail "档位序列无效" ;; esac
+                            CLEAN=$(echo "$V" | sed 's/^,*//;s/,*$//;s/,,\+/,/g')
+                            rc_set_fast LADDER "$CLEAN"
+                            RC_LADDER=$CLEAN
+                            MSG="${MSG}切换序列已更新; "
+                            ;;
+                        perapp)
+                            case "$V" in 0|1) ;; *) fail "perapp 参数无效" ;; esac
+                            rc_set_fast PERAPP "$V"
+                            RC_PERAPP=$V
+                            [ "$V" = "1" ] && MSG="${MSG}按应用切换已开启; " || MSG="${MSG}按应用切换已关闭; "
+                            ;;
+                        lockboot)
+                            case "$V" in 0|1) ;; *) fail "lockboot 参数无效" ;; esac
+                            rc_set_fast LOCKBOOT "$V"
+                            RC_LOCKBOOT=$V
+                            [ "$V" = "1" ] && MSG="${MSG}开机自动锁定已开启; " || MSG="${MSG}开机自动锁定已关闭; "
+                            ;;
+                        *) fail "未知参数 $K" ;;
+                    esac
+                done
+                daemon_sync_fast || MSG="${MSG}(后台服务启动失败, 请重启后重试); "
+                printf '{"ok":true,"message":'
+                printf '%s' "${MSG}已保存" | json_string
+                printf ','
+                emit_ratectl_fast
+                printf '}\n'
+                exit 0
+                ;;
+            app)
+                ACT="${1:-}"; PKG="${2:-}"; HZ="${3:-}"
+                case "$ACT" in
+                    set)
+                        case "$PKG" in ''|*[!a-zA-Z0-9._]*) fail "包名无效" ;; esac
+                        case "$HZ" in ''|*[!0-9]*) fail "档位无效" ;; esac
+                        [ "$HZ" -ge 30 ] && [ "$HZ" -le 300 ] || fail "档位超出范围"
+                        rc_app_set_fast "$PKG" "$HZ"
+                        MSG="已设置 $PKG -> ${HZ}Hz"
+                        ;;
+                    del)
+                        case "$PKG" in ''|*[!a-zA-Z0-9._]*) fail "包名无效" ;; esac
+                        rc_app_del_fast "$PKG"
+                        MSG="已移除 $PKG"
+                        ;;
+                    *) fail "未知子操作" ;;
+                esac
+                printf '{"ok":true,"message":'
+                printf '%s' "$MSG" | json_string
+                printf ','
+                rc_load_fast
+                emit_ratectl_fast
+                printf '}\n'
+                exit 0
+                ;;
+            *) fail "未知子操作" ;;
+        esac
+        ;;
+esac
 SLOT=$(getprop ro.boot.slot_suffix 2>/dev/null)
 DTBO=""
 for d in /dev/block/by-name /dev/block/bootdevice/by-name /dev/block/soc/by-name; do
@@ -58,7 +233,6 @@ if [ -z "$DTBO" ]; then
     DTBO=$(ls -d /dev/block/platform/*/by-name/dtbo 2>/dev/null | head -n 1)
     [ -z "$DTBO" ] && DTBO=$(find /dev/block -maxdepth 4 -name 'dtbo*' 2>/dev/null | head -n 1)
 fi
-
 DEVICE=""
 DEVNAME="未知机型"
 MAXRATE=""
@@ -82,27 +256,17 @@ case "$DEVICE" in
     ace2pro|op11|op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p|gt7p2|gt7s) MAXRATE=120 ;;
 esac
 case "$DEVICE" in
-    # 原厂120可超185: ACE2Pro (无130)
     ace2pro)   CHOICES="132 138 141 144 150 158 165 170 178 185" ;;
-    # 原厂120可超144→放开到150
     op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) CHOICES="130 132 138 141 144 148 150" ;;
-    # 原厂120可超185: GT7 Pro/GT7S (165实测不开机保留移除)
     gt7s)      CHOICES="130 132 138 141 144 148 150 158 170 178 185" ;;
-    # GT7P竞速版 --gt7p 模式实测表
     gt7p)      CHOICES="130 142 144" ;;
-    # 原厂144可超185: GT8 Pro
     gt8p)      CHOICES="148 150 158 165 170 178 185 190" ;;
-    # 原厂144可超195: GT8
     gt8)       CHOICES="148 150 158 165 170 178 185 190 195 198 205" ;;
-    # 原厂165可超185: ACE6T
     ace6t)     CHOICES="170 178 185 190" ;;
-    # 原厂165可超195: 一加15/15T/ACE6
     op15|op15t|ace6) CHOICES="170 178 185 190 195 198 205" ;;
-    # ACE6至尊版 KO 方案档位由内核模块固定
     ace6u)     CHOICES="185" ;;
     op11)      CHOICES="" ;;
 esac
-
 HZ=""
 BATTERY=""
 OC_MODE=""
@@ -119,7 +283,6 @@ HZ="${HZ_CHOICE:-}"
 if [ "$DEVICE" = "ace6u" ] && [ "$OC_MODE" != "ko" ]; then OC_MODE=ko; fi
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
 case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
-
 KO_FILE=""
 KO_AVAIL=0
 KO_LOADED=0
@@ -155,13 +318,11 @@ if [ -n "$KO_MN" ] && [ -d "/sys/module/$KO_MN" ]; then
             ;;
     esac
 fi
-
 DTBO_PATCHED=0
 if [ -n "$DTBO" ] && [ -f "$STOCK" ]; then
     dd if="$DTBO" of="$WORK/web_cur.img" 2>/dev/null
     cmp -s "$WORK/web_cur.img" "$STOCK" || DTBO_PATCHED=1
 fi
-
 LIC_STATE="none"; LIC_QQ=""; LIC_EXP=""
 lic_query() {
     LIC_STATE="none"; LIC_QQ=""; LIC_EXP=""
@@ -186,7 +347,6 @@ lic_query() {
 lic_query
 MACHINE=""
 [ -x "$TOOL" ] && MACHINE=$("$TOOL" machineid 2>/dev/null | sed -n 's/^MACHINE=//p')
-
 RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_APPS=""
 rc_load() {
     RC_BASE=""; RC_LADDER=""; RC_PERAPP=0; RC_LOCKBOOT=0; RC_APPS=""
@@ -203,13 +363,6 @@ rc_load() {
 rc_set() {
     sed -i "s|^$1=.*|$1=$2|" "$RC_CONF" 2>/dev/null
     grep -q "^$1=" "$RC_CONF" 2>/dev/null || echo "$1=$2" >> "$RC_CONF"
-}
-rc_app_set() {
-    sed -i "\|^APP:$1=|d" "$RC_CONF" 2>/dev/null
-    echo "APP:$1=$2" >> "$RC_CONF"
-}
-rc_app_del() {
-    sed -i "\|^APP:$1=|d" "$RC_CONF" 2>/dev/null
 }
 daemon_running() {
     [ -f "$RC_PID" ] || return 1
@@ -256,16 +409,13 @@ emit_ratectl_json() {
     printf '}}'
 }
 rc_load
-
 sf_boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
-
 sf_pin_active() {
     [ -f "$SF_PIN" ] || return 1
     PIN_BOOT=$(cut -d' ' -f1 "$SF_PIN" 2>/dev/null)
     [ "$PIN_BOOT" = "$(sf_boot_id)" ] || { rm -f "$SF_PIN"; return 1; }
     return 0
 }
-
 sf_capture() {
     timeout -k 1 4 dumpsys -t 3 SurfaceFlinger --displays > "$WORK/sf_displays.txt" 2>&1 || return 1
     awk '
@@ -305,11 +455,9 @@ sf_capture() {
     [ -n "$SF_DISPLAY" ] && [ -n "$SF_AID" ] || return 1
     return 0
 }
-
 sf_send() {
     timeout -k 1 4 service call SurfaceFlinger 1035 i32 "$1" i64 "$SF_DISPLAY" >/dev/null 2>&1
 }
-
 sf_lock() {
     if ! mkdir "$SF_LOCK" 2>/dev/null; then
         return 1
@@ -318,14 +466,12 @@ sf_lock() {
     SF_OWNS_LOCK=1
     return 0
 }
-
 sf_release_quiet() {
     if sf_pin_active; then
         sf_capture 2>/dev/null && sf_send -1
         rm -f "$SF_PIN"
     fi
 }
-
 emit_display_json() {
     AG=$(awk -F'|' '$1=="A"{print $6}' "$WORK/sf_modes.txt")
     AW=$(awk -F'|' '$1=="A"{print $3}' "$WORK/sf_modes.txt")
@@ -349,7 +495,6 @@ emit_display_json() {
     awk -F'|' '{ if (n++) printf ","; printf "{\"id\":%s,\"w\":%s,\"h\":%s,\"hz\":%d,\"group\":%s}", $2,$3,$4,int($5+0.5),$6 }' "$WORK/sf_dedup.txt"
     printf ']}'
 }
-
 emit_status() {
     CHOICES_JSON=$(echo "$CHOICES" | tr ' ' ',' | sed 's/^,$//;s/,$//')
     OC_ACTIVE=0
@@ -361,7 +506,7 @@ emit_status() {
     KO_BUILTIN=0
     [ -n "$DEVICE" ] && [ -f "$MODDIR/ko/$DEVICE.ko" ] && KO_BUILTIN=1
     FPS_SHOW=0
-    case "$(settings get system show_refresh_rate 2>/dev/null)" in 1.0|1|true) FPS_SHOW=1 ;; esac
+    case "$(settings --user 0 get system show_refresh_rate 2>/dev/null)" in 1.0|1|true) FPS_SHOW=1 ;; esac
     printf '{"ok":true,"device":"%s","name":' "$DEVICE"
     printf '%s' "$DEVNAME" | json_string
     printf ',"maxrate":"%s","choices":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$OC_OK" "$BATT_OK"
@@ -387,7 +532,6 @@ emit_status() {
     emit_ratectl_json
     printf '}\n'
 }
-
 batt_valid() {
     case "$1" in
         0|1|2|5) return 0 ;;
@@ -396,12 +540,10 @@ batt_valid() {
     esac
     return 1
 }
-
 set_config_val() {
     sed -i "s|^$1=.*|$1=$2|" "$CONFIG" 2>/dev/null
     grep -q "^$1=" "$CONFIG" || echo "$1=$2" >> "$CONFIG"
 }
-
 ltpo_apply() {
     command -v resetprop >/dev/null 2>&1 || return 1
     if [ "$LTPO_OFF" = "1" ]; then
@@ -423,7 +565,6 @@ ltpo_apply() {
     fi
     return 0
 }
-
 emit_result_with_sf() {
     printf '{"ok":true,"message":'
     printf '%s' "$1" | json_string
@@ -431,112 +572,9 @@ emit_result_with_sf() {
     emit_display_json
     printf '}\n'
 }
-
 case "${1:-}" in
     status)
         emit_status
-        ;;
-    fps)
-        # 帧率显示开关: 同开发者选项"显示刷新率" (Settings.System.SHOW_REFRESH_RATE)
-        ACT="${2:-}"
-        case "$ACT" in
-            on)  settings put system show_refresh_rate 1.0 2>/dev/null || fail "开启失败 (settings 命令不可用)" ;;
-            off) settings put system show_refresh_rate 0.0 2>/dev/null || fail "关闭失败 (settings 命令不可用)" ;;
-            *) fail "用法: fps on|off" ;;
-        esac
-        FPS_SHOW=0
-        case "$(settings get system show_refresh_rate 2>/dev/null)" in 1.0|1|true) FPS_SHOW=1 ;; esac
-        MSG=$([ "$FPS_SHOW" = "1" ] && echo "帧率显示已开启" || echo "帧率显示已关闭")
-        printf '{"ok":true,"fps_show":%s,"message":' "$FPS_SHOW"
-        printf '%s' "$MSG" | json_string
-        printf '}\n'
-        ;;
-    apps)
-        APPSLIST=$(pm list packages -3 2>/dev/null | sed 's/^package://' | sort)
-        [ -n "$APPSLIST" ] || fail "无法获取应用列表"
-        printf '{"ok":true,"apps":['
-        FIRST=1
-        for p in $APPSLIST; do
-            case "$p" in *[\"\\]*) continue ;; esac
-            [ "$FIRST" = "1" ] || printf ','
-            printf '"%s"' "$p"
-            FIRST=0
-        done
-        printf ']}\n'
-        ;;
-    ratectl)
-        shift
-        SUB="${1:-}"
-        shift 2>/dev/null
-        case "$SUB" in
-            save)
-                MSG=""
-                for kv in "$@"; do
-                    K=${kv%%=*}; V=${kv#*=}
-                    case "$K" in
-                        base)
-                            case "$V" in ''|*[!0-9]*) fail "基准档位无效" ;; esac
-                            [ "$V" -ge 30 ] && [ "$V" -le 300 ] || fail "基准档位超出范围"
-                            rc_set BASE "$V"
-                            RC_BASE=$V
-                            MSG="${MSG}基准 ${V}Hz; "
-                            ;;
-                        ladder)
-                            case "$V" in ''|*[!0-9,]*) fail "档位序列无效" ;; esac
-                            CLEAN=$(echo "$V" | sed 's/^,*//;s/,*$//;s/,,\+/,/g')
-                            rc_set LADDER "$CLEAN"
-                            RC_LADDER=$CLEAN
-                            MSG="${MSG}切换序列已更新; "
-                            ;;
-                        perapp)
-                            case "$V" in 0|1) ;; *) fail "perapp 参数无效" ;; esac
-                            rc_set PERAPP "$V"
-                            RC_PERAPP=$V
-                            [ "$V" = "1" ] && MSG="${MSG}按应用切换已开启; " || MSG="${MSG}按应用切换已关闭; "
-                            ;;
-                        lockboot)
-                            case "$V" in 0|1) ;; *) fail "lockboot 参数无效" ;; esac
-                            rc_set LOCKBOOT "$V"
-                            RC_LOCKBOOT=$V
-                            [ "$V" = "1" ] && MSG="${MSG}开机自动锁定已开启; " || MSG="${MSG}开机自动锁定已关闭; "
-                            ;;
-                        *) fail "未知参数 $K" ;;
-                    esac
-                done
-                rc_daemon_sync || MSG="${MSG}(后台服务启动失败, 请重启后重试); "
-                printf '{"ok":true,"message":'
-                printf '%s' "${MSG}已保存" | json_string
-                printf ','
-                rc_load
-                emit_ratectl_json
-                printf '}\n'
-                ;;
-            app)
-                ACT="${1:-}"; PKG="${2:-}"; HZ="${3:-}"
-                case "$ACT" in
-                    set)
-                        case "$PKG" in ''|*[!a-zA-Z0-9._]*) fail "包名无效" ;; esac
-                        case "$HZ" in ''|*[!0-9]*) fail "档位无效" ;; esac
-                        [ "$HZ" -ge 30 ] && [ "$HZ" -le 300 ] || fail "档位超出范围"
-                        rc_app_set "$PKG" "$HZ"
-                        MSG="已设置 $PKG -> ${HZ}Hz"
-                        ;;
-                    del)
-                        case "$PKG" in ''|*[!a-zA-Z0-9._]*) fail "包名无效" ;; esac
-                        rc_app_del "$PKG"
-                        MSG="已移除 $PKG"
-                        ;;
-                    *) fail "未知子操作" ;;
-                esac
-                printf '{"ok":true,"message":'
-                printf '%s' "$MSG" | json_string
-                printf ','
-                rc_load
-                emit_ratectl_json
-                printf '}\n'
-                ;;
-            *) fail "未知子操作" ;;
-        esac
         ;;
     save)
         shift

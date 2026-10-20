@@ -60,14 +60,13 @@
         <span id="lock-state" class="badge">自动调频</span>
       </div>
       <div id="rates" class="rate-grid" role="radiogroup" aria-label="选择超频档位"><div class="placeholder">正在读取可用档位…</div></div>
-      <p class="hint" id="rate-hint">灰色为原厂档位，选择超频档位即生成。</p>
     </section>
 
     <section class="setting-section" id="perapp-section" aria-labelledby="perapp-heading" hidden>
       <div class="section-heading"><h2 id="perapp-heading">按应用自动切换</h2><span id="perapp-caption">未开启</span></div>
       <div class="perapp-body">
-        <label class="avb-toggle" for="perapp-toggle"><span>按应用自动切换<span class="t-detail">命中名单自动升挡，离开后回落</span></span><input id="perapp-toggle" type="checkbox" role="switch"></label>
-        <label class="avb-toggle" for="lockboot-toggle"><span>开机自动锁定基准档<span class="t-detail">防止开机被锁 60Hz</span></span><input id="lockboot-toggle" type="checkbox" role="switch"></label>
+        <label class="avb-toggle" for="perapp-toggle"><span>按应用自动切换</span><input id="perapp-toggle" type="checkbox" role="switch"></label>
+        <label class="avb-toggle" for="lockboot-toggle"><span>开机自动锁定基准档</span><input id="lockboot-toggle" type="checkbox" role="switch"></label>
         <div class="app-list-head"><span>应用名单</span><button id="app-add" class="mini-btn" type="button">+ 添加应用</button></div>
         <div id="app-rows" class="app-rows"></div>
       </div>
@@ -83,23 +82,21 @@
     <section class="setting-section" aria-labelledby="batt-heading">
       <div class="section-heading"><h2 id="batt-heading">电池 / 充电方案</h2><span id="batt-caption">自动识别中</span></div>
       <div id="batts" class="batt-grid" role="radiogroup" aria-label="选择电池方案"><div class="placeholder">正在读取可用方案…</div></div>
-      <p class="hint" id="batt-hint">魔改电池仅适用于已换装魔改电池的设备。</p>
     </section>
 
     <section class="setting-section" aria-labelledby="mode-heading">
       <div class="section-heading"><h2 id="mode-heading">超频方案</h2><span id="mode-caption">—</span></div>
       <div id="modes" class="mode-grid" role="radiogroup" aria-label="选择超频方案"></div>
-      <p class="hint">DTBO: 刷入分区，重启生效。KO: 运行时挂载，卸载即恢复。</p>
     </section>
 
     <section class="setting-section" aria-labelledby="ltpo-heading">
       <div class="section-heading"><h2 id="ltpo-heading">LTPO 动态刷新率</h2><span id="ltpo-caption">防锁低档位</span></div>
-      <label class="avb-toggle" for="ltpo-off"><span>禁用 LTPO/VRR 动态刷新率<span class="t-detail">防止系统锁低刷新率，重启后生效</span></span><input id="ltpo-off" type="checkbox" role="switch"></label>
+      <label class="avb-toggle" for="ltpo-off"><span>禁用 LTPO/VRR 动态刷新率</span><input id="ltpo-off" type="checkbox" role="switch"></label>
     </section>
 
     <section class="setting-section" aria-labelledby="fps-heading">
       <div class="section-heading"><h2 id="fps-heading">帧率显示</h2><span id="fps-caption">实时 FPS</span></div>
-      <label class="avb-toggle" for="fps-show"><span>屏幕显示当前刷新率<span class="t-detail">同开发者选项"显示刷新率"，即时生效</span></span><input id="fps-show" type="checkbox" role="switch"></label>
+      <label class="avb-toggle" for="fps-show"><span>屏幕显示当前刷新率</span><input id="fps-show" type="checkbox" role="switch"></label>
     </section>
 
     <section class="apply-section" aria-label="应用设置">

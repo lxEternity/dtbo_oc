@@ -3,7 +3,6 @@ DATA_DIR=/data/adb/dtbo_oc
 STOCK="$DATA_DIR/dtbo_stock.img"
 CONFIG="$DATA_DIR/config"
 BACKUP="/sdcard/dtbo_backup.img"
-
 LTPO_OFF=0
 [ -f "$CONFIG" ] && . "$CONFIG" 2>/dev/null
 if [ "$LTPO_OFF" = "1" ] && command -v resetprop >/dev/null 2>&1; then
@@ -17,7 +16,6 @@ if [ "$LTPO_OFF" = "1" ] && command -v resetprop >/dev/null 2>&1; then
     resetprop --delete debug.egl.swapinterval 2>/dev/null
     echo "[dtbo_oc] LTPO/VRR 属性已释放, 重启后恢复系统默认"
 fi
-
 SLOT=$(getprop ro.boot.slot_suffix)
 DTBO=""
 for d in /dev/block/by-name /dev/block/bootdevice/by-name; do
@@ -25,11 +23,9 @@ for d in /dev/block/by-name /dev/block/bootdevice/by-name; do
         if [ -e "$d/$n" ]; then DTBO="$d/$n"; break 2; fi
     done
 done
-
 SRC=""
 [ -f "$STOCK" ] && SRC="$STOCK"
 [ -z "$SRC" ] && [ -f "$BACKUP" ] && SRC="$BACKUP"
-
 if [ -n "$DTBO" ] && [ -n "$SRC" ]; then
     echo "[dtbo_oc] 正在恢复原始 DTBO ($SRC -> $DTBO)"
     if dd if="$SRC" of="$DTBO" 2>/dev/null; then
