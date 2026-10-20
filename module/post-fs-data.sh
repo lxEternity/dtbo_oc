@@ -91,13 +91,19 @@ expand_hz() {
 
 DRM_SPECS_FOR() {
     D=$1; H=$2
+    LIST=""
     case "$D" in
         gt8p) W=1440; H2=3136 ;;
         op12) W=1440; H2=3168 ;;
-        op15|ace6) W=1272; H2=2772 ;;
+        op13) W=1440; H2=3168; LIST="130 132 138 141 144 148 150" ;;
+        op15) W=1272; H2=2772; LIST="170 178 185 190 195 198 205" ;;
         *) return 1 ;;
     esac
-    L=$(expand_hz "$H" | tr ',' '\n' | tail -n 8 | tr '\n' ' ')
+    if [ -n "$LIST" ]; then
+        L=$LIST
+    else
+        L=$(expand_hz "$H" | tr ',' '\n' | tail -n 8 | tr '\n' ' ')
+    fi
     S=""
     for hz in $L; do
         S="${S:+$S;}${W}x${H2}@${hz}"

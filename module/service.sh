@@ -12,7 +12,25 @@ log() { echo "$@" >> "$LOG"; echo "[dtbo_oc] $@"; }
 
 mkdir -p "$DATA_DIR" "$WORK" "$WORK/ko"
 : > "$LOG"
-chmod 755 "$TOOL" "$DTC" 2>/dev/null
+chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
+
+# 按应用切换 / 开机锁定守护: 等 boot 完成后按 ratectl 配置启动 (幂等)
+(
+    i=0
+    while [ "$i" -lt 45 ]; do
+        [ "$(getprop sys.boot_completed)" = "1" ] && break
+        sleep 2
+        i=$((i+1))
+    done
+    [ -f "$DATA_DIR/ratectl" ] || exit 0
+    _PA=$(sed -n 's/^PERAPP=//p' "$DATA_DIR/ratectl" | tail -n 1)
+    _LB=$(sed -n 's/^LOCKBOOT=//p' "$DATA_DIR/ratectl" | tail -n 1)
+    [ "$_PA" = "1" ] || [ "$_LB" = "1" ] || exit 0
+    if [ -f "$DATA_DIR/ratectl.pid" ]; then
+        kill -0 "$(cat "$DATA_DIR/ratectl.pid" 2>/dev/null)" 2>/dev/null && exit 0
+    fi
+    nohup sh "$MODDIR/bin/ratectl_daemon.sh" >/dev/null 2>&1 &
+) &
 
 if [ ! -f "$CONFIG" ]; then
     cat > "$CONFIG" <<'EOF'
@@ -148,34 +166,26 @@ STRIP=$(echo "$IDINFO" | grep '^STRIP_ABOVE=' | cut -d= -f2)
 [ -z "$STRIP" ] && STRIP=0
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
-expand_hz() {
-    T=$1; L=""
-    for t in 130 132 138 141 144 148 150 158 165 170 178 185 188 190 195 198; do
-        [ "$t" -le "$T" ] || continue
-        L="${L:+$L,}$t"
-    done
-    echo "$L"
-}
-
 CHOICES=""
 case "$DEVICE" in
-    ace2pro)   CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=144 ;;
-    op13t)     CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
-    op15t)     CHOICES="$(expand_hz 195 | tr ',' ' ') 198"; DEF_HZ=185 ;;
-    ace5)      CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
-    ace3)      CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
-    ace3pro)   CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
-    op12)      CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
-    op13)      CHOICES="130 141 144 150"; DEF_HZ=144 ;;
-    op15|ace6) CHOICES="$(expand_hz 195 | tr ',' ' ') 198"; DEF_HZ=185 ;;
-    gt8)       CHOICES="$(expand_hz 195 | tr ',' ' ') 198"; DEF_HZ=185 ;;
+    # 原厂120可超185: ACE2Pro (无130)
+    ace2pro)   CHOICES="132 138 141 144 150 158 165 170 178 185"; DEF_HZ=144 ;;
+    # 原厂120可超144→放开到150
+    op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) CHOICES="130 132 138 141 144 148 150"; DEF_HZ=144 ;;
+    # 原厂120可超185: GT7 Pro/GT7S (165实测不开机保留移除)
+    gt7s)      CHOICES="130 132 138 141 144 148 150 158 170 178 185"; DEF_HZ=185 ;;
+    # GT7P竞速版 --gt7p 模式实测表
     gt7p)      CHOICES="130 142 144"; DEF_HZ=144 ;;
-    gt7s)      CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=185 ;;
-    gt8p)      CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=185 ;;
-    ace6t)     CHOICES=$(expand_hz 185 | tr ',' ' '); DEF_HZ=185 ;;
+    # 原厂144可超185: GT8 Pro
+    gt8p)      CHOICES="148 150 158 165 170 178 185 190"; DEF_HZ=185 ;;
+    # 原厂144可超195: GT8
+    gt8)       CHOICES="148 150 158 165 170 178 185 190 195 198 205"; DEF_HZ=185 ;;
+    # 原厂165可超185: ACE6T
+    ace6t)     CHOICES="170 178 185 190"; DEF_HZ=185 ;;
+    # 原厂165可超195: 一加15/15T/ACE6
+    op15|op15t|ace6) CHOICES="170 178 185 190 195 198 205"; DEF_HZ=185 ;;
+    # ACE6至尊版 KO 方案档位由内核模块固定
     ace6u)     CHOICES="185"; DEF_HZ=185 ;;
-    ace5p)     CHOICES=$(expand_hz 144 | tr ',' ' '); DEF_HZ=144 ;;
-    gt7p2)     CHOICES=$(expand_hz 150 | tr ',' ' '); DEF_HZ=144 ;;
     op11)      CHOICES=""; DEF_HZ=0 ;;
     *) log "[中止] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
@@ -297,22 +307,14 @@ if [ "$HZ_CHOICE" = "0" ]; then
     log "本机型不超频, 仅应用电池/充电方案 (BATTERY=$BATTERY)"
     [ "$BATTERY" = "0" ] && { log "电池方案也为原版, 无需任何修改"; exit 0; }
 else
+    # 选择任一超频档位即生成机型完整档位列表 (档位切换功能需要全部档位)
     if [ "$DEVICE" = "gt7p" ]; then
-        case "$HZ_CHOICE" in
-            130) HZ="130" ;;
-            142) HZ="130,142" ;;
-            *)   HZ="130,142,144" ;;
-        esac
-    elif [ "$DEVICE" = "op13" ]; then
-        case "$HZ_CHOICE" in
-            144) HZ="130,141,144" ;;
-            *)   HZ="130,141,144,150" ;;
-        esac
+        HZ="130,142,144"
     else
-        HZ=$(expand_hz "$HZ_CHOICE")
+        HZ=$(echo "$CHOICES" | tr ' ' ',')
     fi
     [ -z "$HZ" ] && { log "[错误] 档位展开失败"; exit 1; }
-    log "生成档位列表: $HZ (电池模式 $BATTERY, 原厂已有档位自动跳过)"
+    log "生成档位列表 (完整): $HZ (电池模式 $BATTERY, 原厂已有档位自动跳过)"
 fi
 
 ko_unload
@@ -322,11 +324,20 @@ rm -rf "$WORK"/e*_* 2>/dev/null
 PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --battery $BATTERY --workdir $WORK"
 [ -n "$HZ" ] && PATCH_ARGS="$PATCH_ARGS --hz $HZ"
 [ "$DEVICE" = "gt7p" ] && PATCH_ARGS="$PATCH_ARGS --gt7p"
-[ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2"
-[ "$DEVICE" = "op13t" ] && PATCH_ARGS="$PATCH_ARGS --multifam"
+[ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2 --min-clone"
+[ "$DEVICE" = "gt7s" ] && PATCH_ARGS="$PATCH_ARGS --gt7s"
+[ "$DEVICE" = "op13t" ] && PATCH_ARGS="$PATCH_ARGS --multifam --min-clone"
 [ "$STRIP" != "0" ] && PATCH_ARGS="$PATCH_ARGS --strip-above $STRIP"
-[ "$DEVICE" = "op12" ] && PATCH_ARGS="$PATCH_ARGS --multifam"
-[ "$DEVICE" = "op13" ] && PATCH_ARGS="$PATCH_ARGS --include-family wqhd_sdc"
+[ "$DEVICE" = "op12" ] && PATCH_ARGS="$PATCH_ARGS --multifam --min-clone"
+[ "$DEVICE" = "op13" ] && PATCH_ARGS="$PATCH_ARGS --include-family wqhd_sdc --min-clone"
+# 静态基面板机型: 最小克隆模型 (porch/phy 保持基准原值, 时钟等比), 修复
+# interp3 插值压缩 porch/phy 超出 DDIC 底限导致的档位丢失/不开机 (社区实机验证)
+# op15/op15t/ace6/ace6t: 165 静态基准 (AD296/AA605/AA616/AA607), 标准模式 vbp 压缩 31% 不开机
+# gt8/gt8p: qsync 144 静态基准 (AE096), 同样压缩风险
+# ace2pro 除外: interp3 锚点即该机型教程实机标定, 保持标准模式
+case "$DEVICE" in
+    op15|op15t|ace6|ace6t|gt8|gt8p|ace5|ace5p|ace3|ace3pro) PATCH_ARGS="$PATCH_ARGS --min-clone" ;;
+esac
 "$TOOL" patch $PATCH_ARGS >> "$LOG" 2>&1
 RC=$?
 [ "$RC" != "0" ] && [ "$RC" != "3" ] && { log "[错误] 补丁生成失败 (exit=$RC), 详情见 $LOG, 未做任何写入"; exit 1; }

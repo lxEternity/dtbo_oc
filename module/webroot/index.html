@@ -51,30 +51,50 @@
         <button id="verify-auto-btn" class="verify-button ghost" type="button">自动验证</button>
       </div>
       <div class="machine-row"><span class="m-label">主板ID</span><code id="machine-id">—</code><button id="copy-machine" class="mini-btn ghost" type="button">复制</button></div>
-      <p class="hint">自动验证读取本机QQ/TIM账号并联网核对群名单; 也可手动输入QQ号。通过后授权30天, 到期自动重新验证。QQ可绑定机器码 (需群主在名单中配置), 复制主板ID发给群主即可申请绑定。</p>
     </section>
 
     <section class="setting-section" aria-labelledby="rate-heading">
       <div class="section-heading"><h2 id="rate-heading">超频档位</h2><span id="rates-caption">自动识别中</span></div>
+      <div id="rate-tools" hidden>
+        <button id="lock-btn" class="mini-btn lock" type="button">锁定基准档位</button>
+        <span id="lock-state" class="badge">自动调频</span>
+      </div>
       <div id="rates" class="rate-grid" role="radiogroup" aria-label="选择超频档位"><div class="placeholder">正在读取可用档位…</div></div>
-      <p class="hint" id="rate-hint">灰色为原厂档位 (仅展示); 超频档位为可选目标, 生成时不超过所选档位, 原厂已有档位自动跳过。</p>
+      <p class="hint" id="rate-hint">灰色为原厂档位，选择超频档位即生成。</p>
     </section>
+
+    <section class="setting-section" id="perapp-section" aria-labelledby="perapp-heading" hidden>
+      <div class="section-heading"><h2 id="perapp-heading">按应用自动切换</h2><span id="perapp-caption">未开启</span></div>
+      <div class="perapp-body">
+        <label class="avb-toggle" for="perapp-toggle"><span>按应用自动切换<span class="t-detail">命中名单自动升挡，离开后回落</span></span><input id="perapp-toggle" type="checkbox" role="switch"></label>
+        <label class="avb-toggle" for="lockboot-toggle"><span>开机自动锁定基准档<span class="t-detail">防止开机被锁 60Hz</span></span><input id="lockboot-toggle" type="checkbox" role="switch"></label>
+        <div class="app-list-head"><span>应用名单</span><button id="app-add" class="mini-btn" type="button">+ 添加应用</button></div>
+        <div id="app-rows" class="app-rows"></div>
+      </div>
+    </section>
+
+    <div id="app-picker" class="app-picker" hidden>
+      <div class="ap-panel">
+        <div class="ap-head"><input id="ap-search" type="text" placeholder="搜索包名…" autocomplete="off"><button id="ap-close" class="mini-btn ghost" type="button">关闭</button></div>
+        <div id="ap-list" class="ap-list"></div>
+      </div>
+    </div>
 
     <section class="setting-section" aria-labelledby="batt-heading">
       <div class="section-heading"><h2 id="batt-heading">电池 / 充电方案</h2><span id="batt-caption">自动识别中</span></div>
       <div id="batts" class="batt-grid" role="radiogroup" aria-label="选择电池方案"><div class="placeholder">正在读取可用方案…</div></div>
-      <p class="hint" id="batt-hint">魔改电池选项仅适用于已更换 6100mAh 魔改电池的设备。</p>
+      <p class="hint" id="batt-hint">魔改电池仅适用于已换装魔改电池的设备。</p>
     </section>
 
     <section class="setting-section" aria-labelledby="mode-heading">
       <div class="section-heading"><h2 id="mode-heading">超频方案</h2><span id="mode-caption">—</span></div>
       <div id="modes" class="mode-grid" role="radiogroup" aria-label="选择超频方案"></div>
-      <p class="hint">DTBO 方案: 生成超频档位 DTBO 并刷入分区 (重启生效)。KO 方案: 运行时挂载内核模块, 不修改 DTBO, 卸载即恢复原厂档位。</p>
+      <p class="hint">DTBO: 刷入分区，重启生效。KO: 运行时挂载，卸载即恢复。</p>
     </section>
 
     <section class="setting-section" aria-labelledby="ltpo-heading">
       <div class="section-heading"><h2 id="ltpo-heading">LTPO 动态刷新率</h2><span id="ltpo-caption">防锁低档位</span></div>
-      <label class="avb-toggle" for="ltpo-off"><span>禁用 LTPO/VRR 动态刷新率<span class="t-detail">防止系统自动降档 (如锁 60Hz), 超频档位更稳定; 可能略增耗电, 重启后完全生效</span></span><input id="ltpo-off" type="checkbox" role="switch"></label>
+      <label class="avb-toggle" for="ltpo-off"><span>禁用 LTPO/VRR 动态刷新率<span class="t-detail">防止系统锁低刷新率，重启后生效</span></span><input id="ltpo-off" type="checkbox" role="switch"></label>
     </section>
 
     <section class="apply-section" aria-label="应用设置">

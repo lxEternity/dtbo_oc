@@ -1349,14 +1349,22 @@ typedef struct {
                        一组; 其余机型默认每面板仅克隆最高基准所在家族避免重复档位) */
     uint32_t strip_above;  /* 剥离 rate > 此值的时序节点 (旧版模组 OC 克隆清理,
                               0 = 不剥离; 由 identify 按机型原厂最高档输出) */
-    int min_clone;  /* 静态最小克隆 (op13): porch/phy/vsync/transfer 全部原样,
-                       仅 framerate + clockrate 纯等比缩放 (基准 x hz/base_hz),
-                       一加13 AA569 实机验证模型 (社区镜像 130/141/144/150 逐属性吻合) */
+    int min_clone;  /* 静态最小克隆 (op12/op13/op13t/ace5/ace5p 静态基): porch/phy/
+                       vsync/transfer 全部原样, 仅 framerate + clockrate 纯等比缩放
+                       (基准 x hz/base_hz), 一加13 社区实机验证模型 (镜像 130/141/
+                       144/150 档 porch/phy/transfer 与基准逐字节一致, 时钟等比
+                       margin=1.0 偏差<0.1%); 动态基机型不受影响 (保持 dyn_min) */
     int gt7p2;  /* GT7 Pro 竞速版新平台 (lafa/AC180): 静态最小克隆 — 基准固定原厂
                    120 档, porch/phy/vsync/adfr 保留原值, 仅改 name/framerate/
                    clockrate/transfer; margin 复用 GT7P 实测 (>=144:1.0208, 与
                    同 DTBO AE084 面板原厂 144 档 1.0206 吻合), transfer>=144 用
                    AE084 原厂比例 0.884 (6900->6100) */
+    int gt7s;   /* 真我 GT7 Pro (pista/AB849): 最小克隆 — 静态面板 (oa_fhd/wqhd_sdc)
+                   与动态面板 (sa_fhd 带 dyn-clk-list) 统一保留 porch/phy/vsync 原值,
+                   margin 用 GT7P 家族实测拟合 (>=144:1.0208), transfer>=142 用
+                   0.938 (GT7P AE035 144 档 6290->5900 同族标定);
+                   修复标准 interp3 在 158/165+ 档压缩 porch/phy 超出面板 DDIC
+                   底限导致的不开机 */
 } PatchCfg;
 
 static uint64_t clock_override(const PatchCfg *c, int hz) {
@@ -1600,7 +1608,8 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
            gt7p2 (静态最小克隆): AC180/AE084 静态基准, 同样保留 porch/phy 原值 */
         int dyn_min = (B->is_dynamic && !cfg->gt7p && !B->is_mtk) ||
                       (cfg->min_clone && !B->is_mtk) ||
-                      (cfg->gt7p2 && !B->is_mtk);
+                      (cfg->gt7p2 && !B->is_mtk) ||
+                      (cfg->gt7s && !B->is_mtk);
         char bfam[160];
         name_has_hz_suffix(B->name, bfam, sizeof(bfam));
         if (B->rate < 60) continue;
@@ -1672,7 +1681,7 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                        的偏差均 <0.1%, 动态基准机型保持原拟合不扰动 */
                     double margin;
                     if (cfg->gt7p) margin = hz >= 144 ? 1.0208 : (hz >= 140 ? 1.0001 : 1.0003);
-                    else if (cfg->min_clone) margin = 1.0;
+                    else if (cfg->min_clone && !B->is_dynamic) margin = 1.0;
                     else margin = hz >= 144 ? 1.0208 : (hz >= 140 ? 1.0001 : 1.0003);
                     newclk = (uint64_t)((double)B->clock * ratio * margin + 0.5);
                     if (tr) { newclk = tr->clk; dyn0 = tr->dyn0; }
@@ -1687,10 +1696,16 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             }
             uint32_t ntransfer = 0;
             if (B->has_transfer) {
-                if (dyn_min) {
+                if (cfg->min_clone && !B->is_dynamic) {
+                    /* min_clone 静态基准 (op13 社区实机模型): transfer 全档位保持
+                       基准原值 (社区镜像 130/141/144/150 与所在面板基准逐字节一致),
+                       置 0 走原行复制 */
+                    ntransfer = 0;
+                } else if (dyn_min) {
                     /* 动态基准最小克隆: 沿用 GT7P 实测标定 (142/144 档 6290->5900, 即 x0.938;
                        低档位保持基准值), 避免过度压缩 MDP 传输预算;
-                       gt7p2: 用同 DTBO AE084 面板原厂 144 档比例 0.884 (6900->6100) */
+                       gt7p2: 用同 DTBO AE084 面板原厂 144 档比例 0.884 (6900->6100);
+                       gt7s 静态面板: 同 0.938 (sa_fhd 同族 AE035 144 档实测) */
                     double tf = cfg->gt7p2 ? 0.884 : 0.938;
                     ntransfer = hz >= 142 ? (uint32_t)((double)B->transfer * tf + 0.5) : B->transfer;
                 } else {
@@ -3225,6 +3240,10 @@ int main(int argc, char **argv) {
             "      [--gt7p]  GT7 Pro 竞速版简单克隆模式 (sa_fhd 动态基准, 保留 dyn-clk, porch/phy 原值)\n"
             "      [--gt7p2] GT7 Pro 竞速版新平台静态最小克隆 (AC180 基准固定 120, porch/phy/adfr 原值,\n"
             "                clock margin 实测标定 >=144:1.0208, transfer>=144 x0.884)\n"
+            "      [--gt7s]  真我 GT7 Pro 最小克隆 (静态+动态面板统一 porch/phy/vsync 原值,\n"
+            "                margin>=144:1.0208 GT7P 同族拟合, transfer>=142 x0.938; 修复 165 档不开机)\n"
+            "      [--min-clone] 静态最小克隆 (op12/op13/op13t/ace5/ace5p): porch/phy/vsync/\n"
+            "                transfer 全部原值, 时钟纯等比 margin=1.0 (一加13 社区实机验证模型)\n"
             "      [--battery 0-6]  0=不改(默认)\n"
             "                      1=解除充电限流 (全机型: 老平台删qcom限流节点/新平台策略表电流x2)\n"
             "                      2=解除充电限流+关机电压2800 电池解容 (全机型)\n"
@@ -3244,7 +3263,7 @@ int main(int argc, char **argv) {
     int battery = 0;
     uint32_t strip_above = 0;
     double mlow = 1.012205, mhigh = 1.021537;
-    int no_phy = 0, verbose = 0, gt7p = 0, multifam = 0, min_clone = 0, gt7p2 = 0;
+    int no_phy = 0, verbose = 0, gt7p = 0, multifam = 0, min_clone = 0, gt7p2 = 0, gt7s = 0;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--img") && i+1 < argc) img = argv[++i];
         else if (!strcmp(argv[i], "--stock-img") && i+1 < argc) stock = argv[++i];
@@ -3266,6 +3285,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--no-phy")) no_phy = 1;
         else if (!strcmp(argv[i], "--gt7p")) gt7p = 1;
         else if (!strcmp(argv[i], "--gt7p2")) gt7p2 = 1;
+        else if (!strcmp(argv[i], "--gt7s")) gt7s = 1;
         else if (!strcmp(argv[i], "--multifam")) multifam = 1;
         else if (!strcmp(argv[i], "--min-clone")) min_clone = 1;
         else if (!strcmp(argv[i], "-v")) verbose = 1;
@@ -3323,6 +3343,7 @@ int main(int argc, char **argv) {
         cfg.modify_phy = !no_phy;
         cfg.gt7p = gt7p;
         cfg.gt7p2 = gt7p2;
+        cfg.gt7s = gt7s;
         cfg.multifam = multifam;
         cfg.strip_above = strip_above;
         cfg.min_clone = min_clone;

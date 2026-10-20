@@ -156,12 +156,51 @@ footer{text-align:center;color:var(--footer);font-size:8.5px;letter-spacing:1px;
 .machine-row code{flex:1;min-width:0;color:var(--accent);font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 [hidden]{display:none!important}
 .placeholder{grid-column:1/-1;color:var(--muted);font-size:11.5px;background:rgba(var(--surface-rgb),var(--card-alpha));padding:20px;border-radius:16px}
+#rate-tools{display:flex;align-items:center;gap:9px;margin-bottom:11px}
+#rate-tools .badge{font-variant-numeric:tabular-nums}
+#lock-btn{height:34px}
+.rate-grid.two-col{grid-template-columns:repeat(2,minmax(0,1fr))}
+.rate-card{border:1px solid var(--line);background:rgba(var(--surface-rgb),var(--card-alpha));border-radius:18px;padding:10px 12px 11px;position:relative}
+.rate-card.base{border-color:var(--accent-line)}
+.rate-card.cur{border-color:var(--accent);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.16)}
+.rc-head{display:flex;align-items:baseline;gap:2px;border:none;background:none;padding:0;color:inherit;text-align:left}
+.rc-head .rate-number{font-size:21px;font-weight:650}
+.rate-card.cur .rate-number{color:var(--accent-strong)}
+.rc-tags{margin-left:auto;display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.rc-tag{font-size:8.5px;padding:2.5px 6.5px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.rate-card.oc .rc-tag:first-child{border-color:var(--amber-line);color:var(--amber)}
+.rc-tag.cur{border-color:var(--accent);color:var(--accent-strong);background:rgba(var(--tint-rgb),var(--ctl-alpha))}
+.rc-tag.base{border-color:var(--accent-line);color:var(--accent);background:rgba(var(--tint-rgb),var(--ctl-alpha))}
+.rc-actions{display:flex;align-items:center;gap:6px;margin-top:9px;flex-wrap:wrap}
+.rc-btn{height:27px;padding:0 10px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:10.5px;font-weight:600}
+.rc-btn.on{border-color:var(--accent);color:var(--accent-strong);background:rgba(var(--tint-rgb),var(--ctl-alpha))}
+.rc-btn.del{border-color:var(--danger-line);color:var(--danger)}
+.rc-btn:active{filter:brightness(1.2)}
+.rc-order{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);margin-left:auto}
+.rc-order input{width:38px;height:27px;border:1px solid var(--line);border-radius:10px;background:rgba(var(--surface-rgb),var(--ctl-alpha));color:var(--text);font:inherit;font-size:11px;text-align:center;padding:0}
+.rc-order input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.perapp-body{display:flex;flex-direction:column;gap:9px}
+.perapp-body .hint{margin:0 0 2px}
+.app-list-head{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px}
+.app-rows{display:flex;flex-direction:column;gap:7px}
+.app-row{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--line);border-radius:15px;background:rgba(var(--surface-rgb),var(--card-alpha));font-size:12px}
+.app-name{flex:1;min-width:0;color:var(--text);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.app-hz{height:30px;border:1px solid var(--line);border-radius:10px;background:rgba(var(--surface-rgb),var(--ctl-alpha));color:var(--text);font:inherit;font-size:11.5px;padding:0 4px;flex:none}
+.app-empty{color:var(--muted);font-size:11px;padding:10px 12px;border:1px dashed var(--line);border-radius:15px;line-height:1.7}
+.app-picker{position:fixed;inset:0;z-index:120;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.5)}
+.ap-panel{width:100%;max-width:420px;max-height:min(70vh,480px);display:flex;flex-direction:column;border:1px solid var(--line);border-radius:22px;background:rgba(var(--surface-rgb),.98);box-shadow:0 18px 48px rgba(0,0,0,.5);overflow:hidden}
+.ap-head{display:flex;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.ap-head input{flex:1;min-width:0;height:36px;border:1px solid var(--line);border-radius:12px;background:rgba(var(--surface-rgb),var(--ctl-alpha));color:var(--text);font:inherit;font-size:12px;padding:0 12px}
+.ap-head input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.ap-list{overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:5px}
+.ap-item{text-align:left;border:1px solid transparent;background:none;color:var(--text);font:inherit;font-size:11.5px;font-family:ui-monospace,Menlo,Consolas,monospace;padding:9px 12px;border-radius:12px}
+.ap-item:active,.ap-item:hover{background:rgba(var(--tint-rgb),var(--ctl-alpha));border-color:var(--accent-line)}
 body.hoverfx :is(.rate-choice,.batt-choice,.mode-choice,.avb-toggle,.verify-state,.machine-row,.qq-input,.mini-btn,.verify-button,.restore-button,.icon-button,.swatch):not(:disabled):hover{transform:translateY(-2px)}
 body.hoverfx .apply-button:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(var(--accent-rgb),.28)}
 body.hoverfx button:not(:disabled):hover{filter:brightness(1.07)}
 body.hoverfx .apply-button:not(:disabled):hover{filter:none}
 body.hoverfx :is(.rate-choice,.batt-choice,.mode-choice):not(:disabled):hover{box-shadow:0 6px 16px rgba(0,0,0,.28)}
-body.glass :is(.current-card,.rate-choice,.batt-choice,.mode-choice,.avb-toggle,.verify-state,.machine-row,.qq-input,.notice,.error,.placeholder,.theme-panel,.icon-button){backdrop-filter:blur(16px) saturate(1.5);-webkit-backdrop-filter:blur(16px) saturate(1.5);border-color:var(--glass-line);box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
+body.glass :is(.current-card,.rate-choice,.batt-choice,.mode-choice,.avb-toggle,.verify-state,.machine-row,.qq-input,.notice,.error,.placeholder,.theme-panel,.icon-button,.rate-card,.app-row,.app-empty,.ap-panel){backdrop-filter:blur(16px) saturate(1.5);-webkit-backdrop-filter:blur(16px) saturate(1.5);border-color:var(--glass-line);box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
 body.glass .current-card{border-color:rgba(var(--accent-rgb),.2)}
 .busy .icon-button svg{animation:spin 1.2s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
