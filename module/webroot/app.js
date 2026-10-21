@@ -383,8 +383,6 @@ let rmEdit = null;      // 档位标注编辑副本 (rates 数组)
 let rmDirty = false;
 const appNames = {};
 
-function rmRates() { return rmDirty && rmEdit ? rmEdit : (rm?.rates || []); }
-
 function rmSyncBusy() {
   const off = rmBusy;
   ['rm-scan', 'rm-unlock', 'rm-stop', 'rm-app-add', 'rm-rates-save'].forEach(id => { $(id).disabled = off; });
@@ -523,7 +521,9 @@ function rmDraw() {
 function rmDrawAnnotate() {
   const list = $('rm-rates-list');
   const frag = document.createDocumentFragment();
-  const rates = rmRates();
+  // 编辑副本: 首次渲染时从状态拷贝, 编辑仅改副本, 保存成功后丢弃
+  if (!rmEdit) rmEdit = (rm?.rates || []).map(r => ({ ...r }));
+  const rates = rmEdit;
   const groups = new Map();
   [...rates].sort((a, b) => a.fps - b.fps || a.id - b.id).forEach(r => {
     const key = `${r.w}x${r.h}`;
@@ -540,25 +540,31 @@ function rmDrawAnnotate() {
       const num = span('rm-rate-num', String(r.fps));
       num.append(span('rm-unit', 'Hz'));
       row.append(num);
-      // 类型切换: 原生 <-> 超频
-      const typeBtn = document.createElement('button');
-      typeBtn.type = 'button';
-      typeBtn.className = 'rc-btn' + (r.type === 'overclock' ? ' on amber' : '');
-      typeBtn.textContent = r.type === 'overclock' ? '超频' : '原生';
-      typeBtn.addEventListener('click', () => {
-        if (r.type === 'overclock' && r.base === 1) { rmNotify('该档是原生基准, 请先将基准改为其他原生档。', true); return; }
-        r.type = r.type === 'overclock' ? 'native' : 'overclock';
-        r.base = 0;
-        if (r.type === 'overclock' && !r.ord) r.ord = 1;
-        rmDirty = true;
-        redraw();
+      // 类型: 星驰式 [原生|超频] 分段选择, 点「超频」即设为超频档
+      const seg = span('rc-types', '');
+      [['native', '原生'], ['overclock', '超频']].forEach(([t, label]) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'rc-seg' + (r.type === t ? ' on' : '') + (t === 'overclock' ? ' oc' : '');
+        b.textContent = label;
+        b.setAttribute('aria-pressed', r.type === t ? 'true' : 'false');
+        b.addEventListener('click', () => {
+          if (r.type === t) return;
+          if (t === 'overclock' && r.base === 1) { rmNotify('该档是原生基准, 请先将基准改为其他原生档。', true); return; }
+          r.type = t;
+          if (t === 'native') r.ord = 0;
+          else if (!r.ord) r.ord = 1;
+          rmDirty = true;
+          redraw();
+        });
+        seg.append(b);
       });
-      row.append(typeBtn);
+      row.append(seg);
       // 基准 (native 单选)
       const baseBtn = document.createElement('button');
       baseBtn.type = 'button';
       baseBtn.className = 'rc-btn' + (r.base === 1 ? ' on' : '');
-      baseBtn.textContent = r.base === 1 ? '✓ 基准' : '设基准';
+      baseBtn.textContent = r.base === 1 ? '✓ 已设为原生基准' : '设为原生基准';
       baseBtn.disabled = r.type !== 'native';
       baseBtn.addEventListener('click', () => {
         rates.forEach(v => { if (v.w === r.w && v.h === r.h) v.base = 0; });

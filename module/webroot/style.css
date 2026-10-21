@@ -210,6 +210,13 @@ footer{text-align:center;color:var(--footer);font-size:8px;letter-spacing:1px;ma
 .rc-btn.on.amber{border-color:var(--amber);color:var(--amber-strong);background:rgba(var(--amber-bg),var(--ctl-alpha))}
 .rc-btn.del{border-color:var(--danger-line);color:var(--danger)}
 .rc-btn:active{filter:brightness(1.2)}
+/* 星驰式 [原生|超频] 分段选择 */
+.rc-types{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:rgba(var(--surface-rgb),var(--ctl-alpha))}
+.rc-seg{height:25px;padding:0 10px;border:0;background:transparent;color:var(--muted);font-size:10px;font-weight:600}
+.rc-seg+.rc-seg{border-left:1px solid var(--line)}
+.rc-seg.on{color:var(--accent-strong);background:rgba(var(--tint-rgb),var(--ctl-alpha))}
+.rc-seg.oc.on{color:var(--amber-strong);background:rgba(var(--amber-bg),var(--ctl-alpha))}
+.rc-seg:active{filter:brightness(1.2)}
 .rc-order{display:flex;align-items:center;gap:4px;font-size:9.5px;color:var(--muted);margin-left:auto}
 .rc-order input{width:34px;height:25px;border:1px solid var(--line);border-radius:9px;background:rgba(var(--surface-rgb),var(--ctl-alpha));color:var(--text);font:inherit;font-size:10.5px;text-align:center;padding:0}
 .rc-order input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
