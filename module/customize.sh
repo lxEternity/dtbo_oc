@@ -261,7 +261,11 @@ fi
 
 if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" ]; }; then
     ui_print " "
-    ui_print "- 请用 [音量+/音量-] 切换选项, [电源键] 确认"
+    if [ "$HAVE_KEYS" = "1" ]; then
+        ui_print "- 请用 [音量+/音量-] 切换选项, [电源键] 确认"
+    else
+        ui_print "- 请用 [音量+/音量-] 切换选项, [电源键] 确认 (兼容模式)"
+    fi
 
     MODE_INIT=0
     [ "${OC_MODE:-dtbo}" = "ko" ] && MODE_INIT=1
@@ -340,7 +344,9 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
     ui_choose "禁用 LTPO 动态刷新率 (防止系统自动降档锁 60Hz):" "保持默认 (保留 LTPO/VRR 自适应)|禁用 (超频档位更稳定, 可能略增耗电)" "$LTPO_INIT"
     LTPO_OFF=$([ "$SEL" = "1" ] && echo 1 || echo 0)
 elif [ "$PRESET" != "1" ]; then
-    ui_print "- 当前环境不支持按键交互 (无输入设备/权限), 使用默认/已有配置"
+    ui_print "! 当前环境不支持按键交互 (无输入设备/权限)"
+    ui_print "  使用默认/已有配置, 或在 /sdcard/dtbo_oc.conf 写入预设后重装:"
+    ui_print "  HZ_CHOICE=144 / 165 / 185 / 0(不超频), OC_MODE=dtbo 或 ko"
     if [ -z "$CHOICES" ] || [ "$OC_OK" != "1" ]; then HZ_CHOICE=0; fi
 fi
 

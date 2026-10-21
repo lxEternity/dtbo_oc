@@ -2828,7 +2828,9 @@ static int cmd_keys(void) {
         for (int i = 0; i < 3; i++)
             if (bits[codes[i] >> 3] & (1 << (codes[i] & 7))) has = 1;
         if (!has) { close(fd); continue; }   /* 触摸屏等无关设备不拦截 */
-        if (ioctl(fd, kev_ioc(1, 4, 'E', 0x90), 1) < 0) { close(fd); continue; } /* EVIOCGRAB */
+        /* EVIOCGRAB 独占事件流 (音量条不弹/电源键不息屏); 失败 (EBUSY: 被管理器
+           安装器抢占) 时降级为共享监听 — 按键仍可捕获, 优于完全无响应 */
+        ioctl(fd, kev_ioc(1, 4, 'E', 0x90), 1);
         fds[nf++] = fd;
     }
     closedir(d);
@@ -2846,7 +2848,13 @@ static int cmd_keys(void) {
                 for (;;) {
                     struct kev ev;
                     ssize_t r = read(fds[i], &ev, sizeof(ev));
-                    if (r != (ssize_t)sizeof(ev)) break;   /* EAGAIN/异常 */
+                    if (r != (ssize_t)sizeof(ev)) {
+                        /* SELinux/权限拒绝: 快速剔除该设备, 避免忙等挂满超时 */
+                        if (r < 0 && (errno == EPERM || errno == EACCES || errno == EIO)) {
+                            close(fds[i]); fds[i] = -1; pf[i].fd = -1; pf[i].events = 0; alive--;
+                        }
+                        break;   /* EAGAIN/异常 */
+                    }
                     if (ev.type == KEV_TYPE_KEY && ev.value == 1) {  /* 仅按下, 忽略释放/长按重复 */
                         if (ev.code == KEV_VOLUP) out = "up";
                         else if (ev.code == KEV_VOLDN) out = "down";
