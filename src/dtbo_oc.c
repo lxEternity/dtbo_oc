@@ -1717,10 +1717,16 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             uint32_t ntransfer = 0;
             if (B->has_transfer) {
                 if (cfg->min_clone && !B->is_dynamic) {
-                    /* min_clone 静态基准 (op13 社区实机模型): transfer 全档位保持
-                       基准原值 (社区镜像 130/141/144/150 与所在面板基准逐字节一致),
-                       置 0 走原行复制 */
-                    ntransfer = 0;
+                    /* min_clone 静态基准: porch/phy 保持基准原值 (DDIC 时序安全),
+                       但 transfer 是 MDP 管线预算, 按帧周期等比缩放 —
+                       高帧率档位保持基准值会超过帧周期 (op13 144+: 7300>6944us,
+                       op15 195+: 5200>5128us, gt8p 158+: 7300>6329us, ace6t 190+:
+                       5380>5263us), 驱动校验失败导致不开机 (v2.39-v2.46 黑砖根因);
+                       缩放后仍钳制不超过目标帧周期 95% */
+                    uint32_t cap_tt = (uint32_t)(1000000.0 / hz * 0.95);
+                    ntransfer = (uint32_t)((double)B->transfer * B->rate / hz + 0.5);
+                    if (ntransfer > cap_tt) ntransfer = cap_tt;
+                    if (ntransfer < 100) ntransfer = 100;
                 } else if (dyn_min) {
                     /* 动态基准最小克隆: 沿用 GT7P 实测标定 (142/144 档 6290->5900, 即 x0.938;
                        低档位保持基准值), 避免过度压缩 MDP 传输预算;
