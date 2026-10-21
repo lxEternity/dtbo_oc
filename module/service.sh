@@ -12,7 +12,7 @@ log() { echo "$@" >> "$LOG"; echo "[dtbo_oc] $@"; }
 
 mkdir -p "$DATA_DIR" "$WORK" "$WORK/ko"
 : > "$LOG"
-chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
+chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" "$MODDIR/bin/chgcv_daemon.sh" 2>/dev/null
 
 # 星驰式刷新率守护: 等 boot 完成后按 rc_config.json / apps.conf 启动 (幂等)
 # 启动条件: 全局档位锁定已设置(globalRateId!=0) 或 按应用切换开启且有规则
@@ -36,6 +36,20 @@ chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
         kill -0 "$(cat "$DATA_DIR/ratectl.pid" 2>/dev/null)" 2>/dev/null && exit 0
     fi
     nohup sh "$MODDIR/bin/ratectl_daemon.sh" >/dev/null 2>&1 &
+) &
+
+# 充电恒压守护 (chgcv): 等 boot 完成后启动 (幂等; 内核无 votable 接口时自动退出)
+(
+    i=0
+    while [ "$i" -lt 45 ]; do
+        [ "$(getprop sys.boot_completed)" = "1" ] && break
+        sleep 2
+        i=$((i+1))
+    done
+    [ -f "$DATA_DIR/chgcv.conf" ] || exit 0
+    [ -d /proc/oplus-votable ] || exit 0
+    [ -f "$DATA_DIR/chgcv.pid" ] && kill -0 "$(cat "$DATA_DIR/chgcv.pid" 2>/dev/null)" 2>/dev/null && exit 0
+    nohup sh "$MODDIR/bin/chgcv_daemon.sh" >/dev/null 2>&1 &
 ) &
 
 if [ ! -f "$CONFIG" ]; then
@@ -195,7 +209,7 @@ case "$DEVICE" in
     ace6t)     CHOICES="170 178 185 190"; DEF_HZ=185 ;;
     # 原厂165可超195: 一加15/15T/ACE6
     op15|op15t|ace6) CHOICES="170 178 185 190 195 198 205"; DEF_HZ=185 ;;
-    # ACE6至尊版 KO 方案档位由内核模块固定
+    # 原厂165可超185: ACE6至尊版 (MTK 简单克隆, 仅改帧率属性)
     ace6u)     CHOICES="185"; DEF_HZ=185 ;;
     op11)      CHOICES=""; DEF_HZ=0 ;;
     *) log "[中止] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
@@ -232,12 +246,6 @@ else
 fi
 
 [ -z "$BATTERY" ] && BATTERY=0
-if [ "$DEVICE" = "ace6u" ] && [ "$OC_MODE" != "ko" ]; then
-    log "[提示] 一加ACE6至尊版仅支持 KO 内核挂载方案, 已自动切换 (DTBO 方案已移除)"
-    OC_MODE=ko
-    set_config_val() { sed -i "s/^$1=.*/$1=$2/" "$CONFIG"; }
-    set_config_val OC_MODE ko
-fi
 case "$BATTERY" in 0|1|2|3|4|5|6) ;; *) BATTERY=0 ;; esac
 if [ "$OC_MODE" = "ko" ] && [ "$BATTERY" != "0" ]; then
     log "[提示] KO 方案不修改 DTBO, 电池选项已忽略 (BATTERY=$BATTERY -> 0)"
@@ -350,18 +358,20 @@ PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --battery $BATTERY --workdir $WOR
 [ -n "$HZ" ] && PATCH_ARGS="$PATCH_ARGS --hz $HZ"
 [ "$DEVICE" = "gt7p" ] && PATCH_ARGS="$PATCH_ARGS --gt7p"
 [ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2 --min-clone"
-[ "$DEVICE" = "gt7s" ] && PATCH_ARGS="$PATCH_ARGS --gt7s"
-[ "$DEVICE" = "op13t" ] && PATCH_ARGS="$PATCH_ARGS --multifam --min-clone"
 [ "$STRIP" != "0" ] && PATCH_ARGS="$PATCH_ARGS --strip-above $STRIP"
-[ "$DEVICE" = "op12" ] && PATCH_ARGS="$PATCH_ARGS --multifam --min-clone"
 [ "$DEVICE" = "op13" ] && PATCH_ARGS="$PATCH_ARGS --include-family wqhd_sdc --min-clone"
-# 静态基面板机型: 最小克隆模型 (porch/phy 保持基准原值, 时钟等比), 修复
-# interp3 插值压缩 porch/phy 超出 DDIC 底限导致的档位丢失/不开机 (社区实机验证)
-# op15/op15t/ace6/ace6t: 165 静态基准 (AD296/AA605/AA616/AA607), 标准模式 vbp 压缩 31% 不开机
-# gt8/gt8p: qsync 144 静态基准 (AE096), 同样压缩风险
+# 机型方法映射 (对齐慕容显示增强, 档位仍用本模块预设):
+# ace3/ace3pro/ace5/ace5p/op13t → 一加12方法: oplus+sdc 双供应商家族各克隆一组
+#   (multifam) + 慕容式智能选基 (min-clone: clock/transfer 纯等比, porch/phy 原值)
+# ace6u/ace6t/op15t/op15/ace6 → 一加15方法: min-clone 慕容式智能选基
+#   (ace6u 为 MTK 平台, 走简单克隆仅改帧率属性, min-clone 无害)
+# gt7s → GT8P 方法: min-clone (静态面板 murong 智能选基, sa_fhd 动态面板
+#   dyn-clk-list 等比缩放保留, porch/phy/vsync 原值)
+# gt8/gt8p: qsync 144 静态基准, 同 min-clone
 # ace2pro 除外: interp3 锚点即该机型教程实机标定, 保持标准模式
 case "$DEVICE" in
-    op15|op15t|ace6|ace6t|gt8|gt8p|ace5|ace5p|ace3|ace3pro) PATCH_ARGS="$PATCH_ARGS --min-clone" ;;
+    ace3|ace3pro|ace5|ace5p|op13t|op12) PATCH_ARGS="$PATCH_ARGS --multifam --min-clone" ;;
+    op15|op15t|ace6|ace6t|ace6u|gt8|gt8p|gt7s) PATCH_ARGS="$PATCH_ARGS --min-clone" ;;
 esac
 "$TOOL" patch $PATCH_ARGS >> "$LOG" 2>&1
 RC=$?

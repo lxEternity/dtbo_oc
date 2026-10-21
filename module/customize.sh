@@ -269,20 +269,15 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
 
     MODE_INIT=0
     [ "${OC_MODE:-dtbo}" = "ko" ] && MODE_INIT=1
-    if [ "$DEVICE" = "ace6u" ]; then
-        OC_MODE=ko
-        ui_print "- 一加ACE6至尊版: 仅支持 KO 内核挂载方案 (DTBO 方案已移除)"
-    else
-        ui_choose "选择超频方案:" "DTBO 补丁 (重启生效)|KO 内核挂载 (不改DTBO, 重启生效)" "$MODE_INIT"
-        OC_MODE=$([ "$SEL" = "1" ] && echo ko || echo dtbo)
-        if [ "$OC_MODE" = "ko" ] && [ "$DEVICE" = "ace6" ]; then
-            ui_choose "确认: 仍要在 ACE6 上启用 KO 方案?" "否, 改用 DTBO 补丁 (推荐)|是, 我已知晓无法开机风险" 0
-            [ "$SEL" = "0" ] && { OC_MODE=dtbo; ui_print "- 已改用 DTBO 补丁"; }
-        fi
-        if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then
-            ui_print "- 本机型未内置 KO, 安装后侧载 KO 文件才会生效"
-            ui_print "  (放入 /data/adb/dtbo_oc/ko/$DEVICE.ko 后重启)"
-        fi
+    ui_choose "选择超频方案:" "DTBO 补丁 (重启生效)|KO 内核挂载 (不改DTBO, 重启生效)" "$MODE_INIT"
+    OC_MODE=$([ "$SEL" = "1" ] && echo ko || echo dtbo)
+    if [ "$OC_MODE" = "ko" ] && [ "$DEVICE" = "ace6" ]; then
+        ui_choose "确认: 仍要在 ACE6 上启用 KO 方案?" "否, 改用 DTBO 补丁 (推荐)|是, 我已知晓无法开机风险" 0
+        [ "$SEL" = "0" ] && { OC_MODE=dtbo; ui_print "- 已改用 DTBO 补丁"; }
+    fi
+    if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then
+        ui_print "- 本机型未内置 KO, 安装后侧载 KO 文件才会生效"
+        ui_print "  (放入 /data/adb/dtbo_oc/ko/$DEVICE.ko 后重启)"
     fi
 
     if [ -n "$CHOICES" ] && [ "$OC_OK" = "1" ]; then
@@ -366,10 +361,6 @@ fi
 case "$BATTERY" in 0|1|2|3|4|5|6) ;; *) BATTERY=0 ;; esac
 [ -z "$OC_MODE" ] && OC_MODE=dtbo
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
-if [ "$DEVICE" = "ace6u" ] && [ "$OC_MODE" != "ko" ]; then
-    OC_MODE=ko
-    ui_print "- 一加ACE6至尊版: 仅支持 KO 方案, 已自动切换"
-fi
 if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then
     ui_print "! 未找到本机型 KO ($DEVICE.ko), 已保持 KO 方案"
     ui_print "  (侧载 KO 到 /data/adb/dtbo_oc/ko/ 后重启生效)"

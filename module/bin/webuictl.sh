@@ -248,6 +248,130 @@ rm_scan_rates() {
     mv -f "$DATA_DIR/rates_ord.tmp" "$RC_RATES"
 }
 
+# ---- 充电恒压控制 (chgcv): 复刻电池工具包恒压语义, 无联网验证 ----
+# 接口: /proc/oplus-votable (oplus_chg_v2 调试口, 无授权门控) + sysfs 电池节点
+CHG_CONF="$DATA_DIR/chgcv.conf"
+CHG_PID="$DATA_DIR/chgcv.pid"
+CHG_STATE="$DATA_DIR/chgcv.state"
+CHG_LOGF="$DATA_DIR/chgcv.log"
+CHG_DAEMON="$MODDIR/bin/chgcv_daemon.sh"
+
+chg_defaults() {
+    cat > "$CHG_CONF" <<'EOF'
+enabled=1
+ufcs=1
+pps=1
+svooc=1
+faket=0
+ignore_plc=0
+curr_convergence=1
+fast_max=10900
+pps_max=5000
+cable_override=0
+max_ufcs_chg_reset_cc=2
+ufcs_reset_delay=180
+cv_vol_mv=4565
+cv_max_ma=5000
+batt_full_thr_mv=4470
+tc_vol_thr_mv=4500
+tc_thr_soc=98
+tc_full_ma=400
+tc_vol_full_mv=4485
+thermal_mode=comfort
+comfort_temp_decic=420
+batt_temp_high_decic=550
+thermal_glide_cap=0
+night_comfort=0
+night_start_min=1320
+night_end_min=420
+loop_interval_ms=2000
+EOF
+}
+
+chg_daemon_running() {
+    [ -f "$CHG_PID" ] || return 1
+    DP=$(cat "$CHG_PID" 2>/dev/null)
+    [ -n "$DP" ] || { rm -f "$CHG_PID"; return 1; }
+    kill -0 "$DP" 2>/dev/null && return 0
+    rm -f "$CHG_PID"
+    return 1
+}
+
+chg_daemon_restart() {
+    chg_daemon_running && kill "$(cat "$CHG_PID")" 2>/dev/null
+    rm -f "$CHG_PID"
+    [ -x "$CHG_DAEMON" ] || chmod 755 "$CHG_DAEMON" 2>/dev/null
+    [ -x "$CHG_DAEMON" ] || return 1
+    nohup sh "$CHG_DAEMON" >/dev/null 2>&1 &
+    sleep 0.2
+    chg_daemon_running && return 0
+    sleep 0.3
+    chg_daemon_running
+}
+
+chg_daemon_stop() {
+    chg_daemon_running && kill "$(cat "$CHG_PID")" 2>/dev/null
+    rm -f "$CHG_PID"
+    return 0
+}
+
+chg_relax_all() {
+    # 解除全部强制投票, 交还内核正常充电策略
+    for VT in FV_MAX WIRED_FCC FV_MIN UFCS_NOT_ALLOW PPS_NOT_ALLOW VOOC_DISABLE VOOC_NOT_ALLOW PLC_FORCE_BUCK; do
+        [ -d "/proc/oplus-votable/$VT" ] || continue
+        echo 0 > "/proc/oplus-votable/$VT/force_val" 2>/dev/null
+        echo 0 > "/proc/oplus-votable/$VT/force_active" 2>/dev/null
+    done
+}
+
+chg_v() { sed -n "s/^$1=//p" "$CHG_CONF" 2>/dev/null | tail -1; }
+
+chg_validate() { # chg_validate <key> <val>
+    case "$1" in
+        enabled|ufcs|pps|svooc|faket|ignore_plc|curr_convergence|cable_override|thermal_glide_cap|night_comfort)
+            case "$2" in 0|1) return 0 ;; *) return 1 ;; esac ;;
+        thermal_mode)
+            case "$2" in comfort|limit) return 0 ;; *) return 1 ;; esac ;;
+        fast_max)            [ "$2" -ge 1000 ] 2>/dev/null && [ "$2" -le 13700 ] 2>/dev/null ;;
+        pps_max)             [ "$2" -ge 1000 ] 2>/dev/null && [ "$2" -le 8500 ] 2>/dev/null ;;
+        max_ufcs_chg_reset_cc) [ "$2" -ge 0 ] 2>/dev/null && [ "$2" -le 10 ] 2>/dev/null ;;
+        ufcs_reset_delay)    [ "$2" -ge 0 ] 2>/dev/null && [ "$2" -le 300 ] 2>/dev/null ;;
+        cv_vol_mv)           [ "$2" -ge 4400 ] 2>/dev/null && [ "$2" -le 4620 ] 2>/dev/null ;;
+        cv_max_ma)           [ "$2" -ge 200 ] 2>/dev/null && [ "$2" -le 13700 ] 2>/dev/null ;;
+        batt_full_thr_mv)    [ "$2" -ge 4400 ] 2>/dev/null && [ "$2" -le 4570 ] 2>/dev/null ;;
+        tc_vol_thr_mv)       [ "$2" -ge 4300 ] 2>/dev/null && [ "$2" -le 4560 ] 2>/dev/null ;;
+        tc_thr_soc)          [ "$2" -ge 50 ] 2>/dev/null && [ "$2" -le 100 ] 2>/dev/null ;;
+        tc_full_ma)          [ "$2" -ge 100 ] 2>/dev/null && [ "$2" -le 2000 ] 2>/dev/null ;;
+        tc_vol_full_mv)      [ "$2" -ge 4300 ] 2>/dev/null && [ "$2" -le 4560 ] 2>/dev/null ;;
+        comfort_temp_decic)  [ "$2" -ge 350 ] 2>/dev/null && [ "$2" -le 450 ] 2>/dev/null ;;
+        batt_temp_high_decic) [ "$2" -ge 350 ] 2>/dev/null && [ "$2" -le 550 ] 2>/dev/null ;;
+        night_start_min|night_end_min) [ "$2" -ge 0 ] 2>/dev/null && [ "$2" -le 1439 ] 2>/dev/null ;;
+        loop_interval_ms)    [ "$2" -ge 500 ] 2>/dev/null && [ "$2" -le 10000 ] 2>/dev/null ;;
+        *) return 1 ;;
+    esac
+}
+
+chg_conf_json() { # 配置 + 运行时状态合并输出 "chg" 对象字段
+    [ -f "$CHG_CONF" ] || chg_defaults
+    printf '"enabled":%s,"ufcs":%s,"pps":%s,"svooc":%s,"faket":%s,"ignore_plc":%s,"curr_convergence":%s,"fast_max":%s,"pps_max":%s,"cable_override":%s,"max_ufcs_chg_reset_cc":%s,"ufcs_reset_delay":%s,"cv_vol_mv":%s,"cv_max_ma":%s,"batt_full_thr_mv":%s,"tc_vol_thr_mv":%s,"tc_thr_soc":%s,"tc_full_ma":%s,"tc_vol_full_mv":%s,"comfort_temp_decic":%s,"batt_temp_high_decic":%s,"thermal_glide_cap":%s,"night_comfort":%s,"night_start_min":%s,"night_end_min":%s,"loop_interval_ms":%s' \
+        "$(chg_v enabled)" "$(chg_v ufcs)" "$(chg_v pps)" "$(chg_v svooc)" "$(chg_v faket)" \
+        "$(chg_v ignore_plc)" "$(chg_v curr_convergence)" "$(chg_v fast_max)" "$(chg_v pps_max)" \
+        "$(chg_v cable_override)" "$(chg_v max_ufcs_chg_reset_cc)" "$(chg_v ufcs_reset_delay)" \
+        "$(chg_v cv_vol_mv)" "$(chg_v cv_max_ma)" "$(chg_v batt_full_thr_mv)" "$(chg_v tc_vol_thr_mv)" \
+        "$(chg_v tc_thr_soc)" "$(chg_v tc_full_ma)" "$(chg_v tc_vol_full_mv)" \
+        "$(chg_v comfort_temp_decic)" "$(chg_v batt_temp_high_decic)" "$(chg_v thermal_glide_cap)" \
+        "$(chg_v night_comfort)" "$(chg_v night_start_min)" "$(chg_v night_end_min)" "$(chg_v loop_interval_ms)"
+    printf ',"thermal_mode":"%s"' "$(chg_v thermal_mode)"
+    # 运行时状态
+    if chg_daemon_running; then printf ',"daemon":1'; else printf ',"daemon":0'; fi
+    if [ -d /proc/oplus-votable ]; then printf ',"support":1'; else printf ',"support":0'; fi
+    [ -f "$CHG_STATE" ] && awk -F= '
+        $1=="stage"||$1=="status"||$1=="error" { printf ",\"%s\":\"%s\"", $1, $2 }
+        $1=="vbat"||$1=="ichg"||$1=="temp"||$1=="soc"||$1=="ts"||$1=="fv"||$1=="fcc" { printf ",\"%s\":%s", $1, $2 }
+    ' "$CHG_STATE" | tr -d '\n'
+    printf ',"state_ts":%s' "$(stat -c %Y "$CHG_STATE" 2>/dev/null || echo 0)"
+}
+
 case "${1:-}" in
     apps)
         # 应用列表 (含名称, applist.dex): 结果落盘缓存, 二次打开瞬时返回; 过期后台刷新
@@ -401,6 +525,69 @@ case "${1:-}" in
             *) fail "未知子操作" ;;
         esac
         ;;
+    chg)
+        # 充电恒压: status / save / reset / stop / start / log
+        shift
+        SUB="${1:-}"
+        shift 2>/dev/null
+        case "$SUB" in
+            status)
+                printf '{"ok":true,"chg":{%s}}\n' "$(chg_conf_json)"
+                exit 0
+                ;;
+            save)
+                # chg save k=v k=v ...
+                [ -f "$CHG_CONF" ] || chg_defaults
+                [ $# -ge 1 ] || fail "缺少参数"
+                SAVED=0
+                for kv in "$@"; do
+                    K=${kv%%=*}; V=${kv#*=}
+                    [ "$K" != "$V" ] || fail "参数格式无效: $kv"
+                    chg_validate "$K" "$V" || fail "参数 $K 取值无效: $V"
+                    sed -i "\|^${K}=|d" "$CHG_CONF" 2>/dev/null
+                    echo "${K}=${V}" >> "$CHG_CONF"
+                    SAVED=$((SAVED + 1))
+                done
+                [ "$SAVED" -gt 0 ] || fail "未保存任何配置"
+                chg_daemon_restart 2>/dev/null
+                printf '{"ok":true,"message":"配置已保存并应用 (拔插充电器 2 秒后生效)",'
+                printf '"chg":{%s}}\n' "$(chg_conf_json)"
+                exit 0
+                ;;
+            reset)
+                chg_defaults
+                chg_daemon_restart 2>/dev/null
+                printf '{"ok":true,"message":"已恢复默认配置",'
+                printf '"chg":{%s}}\n' "$(chg_conf_json)"
+                exit 0
+                ;;
+            stop)
+                chg_daemon_stop
+                chg_relax_all
+                printf '{"ok":true,"message":"恒压服务已停止, 已交还官方充电策略",'
+                printf '"chg":{%s}}\n' "$(chg_conf_json)"
+                exit 0
+                ;;
+            start)
+                [ -f "$CHG_CONF" ] || chg_defaults
+                if [ ! -d /proc/oplus-votable ]; then
+                    fail "本机内核无 /proc/oplus-votable 接口, 不支持恒压控制"
+                fi
+                chg_daemon_restart || fail "守护进程启动失败"
+                printf '{"ok":true,"message":"恒压服务已启动",'
+                printf '"chg":{%s}}\n' "$(chg_conf_json)"
+                exit 0
+                ;;
+            log)
+                [ -s "$CHG_LOGF" ] || { printf '{"ok":true,"log":""}\n'; exit 0; }
+                printf '{"ok":true,"log":'
+                tail -n 200 "$CHG_LOGF" | json_string
+                printf '}\n'
+                exit 0
+                ;;
+            *) fail "未知子操作" ;;
+        esac
+        ;;
 esac
 
 SLOT=$(getprop ro.boot.slot_suffix 2>/dev/null)
@@ -454,7 +641,7 @@ case "$DEVICE" in
     ace6t)     CHOICES="170 178 185 190" ;;
     # 原厂165可超195: 一加15/15T/ACE6
     op15|op15t|ace6) CHOICES="170 178 185 190 195 198 205" ;;
-    # ACE6至尊版 KO 方案档位由内核模块固定
+    # 原厂165可超185: ACE6至尊版 (DTBO/KO 双方案)
     ace6u)     CHOICES="185" ;;
     op11)      CHOICES="" ;;
 esac
@@ -486,7 +673,6 @@ HZ="${HZ_CHOICE:-}"
 [ -z "$BATTERY" ] && BATTERY=0
 [ -z "$OC_MODE" ] && OC_MODE=dtbo
 [ -z "$LTPO_OFF" ] && LTPO_OFF=0
-if [ "$DEVICE" = "ace6u" ] && [ "$OC_MODE" != "ko" ]; then OC_MODE=ko; fi
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
 case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
 
@@ -698,7 +884,7 @@ emit_status() {
     printf '{"ok":true,"device":"%s","name":' "$DEVICE"
     printf '%s' "$DEVNAME" | json_string
     printf ',"maxrate":"%s","choices":[%s],"plans":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$PLANS_JSON" "$OC_OK" "$BATT_OK"
-    printf '"hz":%s,"battery":%s,"oc_mode":"%s","ltpo_off":%s,"ko_only":%s,' "$HZ" "$BATTERY" "$OC_MODE" "$LTPO_OFF" "$([ "$DEVICE" = "ace6u" ] && echo true || echo false)"
+    printf '"hz":%s,"battery":%s,"oc_mode":"%s","ltpo_off":%s,' "$HZ" "$BATTERY" "$OC_MODE" "$LTPO_OFF"
     printf '"oc_active":%s,' "$OC_ACTIVE"
     printf '"rm_ready":%s,' "$([ -s "$DATA_DIR/rates.conf" ] && echo 1 || echo 0)"
     printf '"ko":{"available":%s,"builtin":%s,"loaded":%s,"installed":%s,"vermatch":%s,"file":' "$KO_AVAIL" "$KO_BUILTIN" "$KO_LOADED" "$KO_INSTALLED" "${KO_VERMATCH:-null}"
@@ -793,9 +979,6 @@ case "${1:-}" in
                     ;;
             esac
         done
-        if [ "$DEVICE" = "ace6u" ] && [ "$OC_MODE" != "ko" ]; then
-            fail "一加ACE6至尊版仅支持 KO 方案 (DTBO 方案已移除)"
-        fi
         if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then
             MSG="${MSG}未找到 KO ($DEVICE.ko), 侧载到 /data/adb/dtbo_oc/ko/ 后重启生效; "
         fi

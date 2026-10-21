@@ -1439,6 +1439,40 @@ static int name_has_hz_suffix(const char *name, char *base, size_t basesz) {
     return 1;
 }
 
+/* 慕容式智能选基: 同面板同家族的静态原厂候选中, 取刷新率与目标档最接近
+   的节点作克隆基准 (距离相同取较高档)。目标档高于全部候选时自然落在
+   最高档 (与固定最高档基准行为一致); 目标档介于两档之间时自动选更近
+   的低档 (如 123 介于 120/144 之间选 120), 与慕容 dts_tool 的模板选择
+   行为一致 (RMX5200: 123 -> wqhd_sdc_120 模板, 150-180 -> wqhd_sdc_144) */
+static int murong_pick_base(TNode *nodes, int nn, const PatchCfg *cfg,
+                            const char *fam, int panel, int hz,
+                            char (*stock_names)[160], int stock_n) {
+    int best = -1;
+    for (int j = 0; j < nn; j++) {
+        TNode *t = &nodes[j];
+        if (t->panel != panel || t->is_dynamic || t->is_mtk) continue;
+        if (t->name[0] >= '0' && t->name[0] <= '9') continue;
+        if (!t->has_rate || t->has_rate < 0) continue;
+        if (t->has_clock < 0 || t->has_phy < 0 || !t->has_clock) continue;
+        if (!t->has_width || !t->has_height) continue;
+        char f[160];
+        name_has_hz_suffix(t->name, f, sizeof(f));
+        if (strcmp(f, fam)) continue;
+        if (cfg->wxh_filter && (t->width != cfg->wx || t->height != cfg->wy)) continue;
+        if (stock_n >= 0) {
+            int in_stock = 0;
+            for (int s = 0; s < stock_n; s++)
+                if (!strcmp(stock_names[s], t->name)) { in_stock = 1; break; }
+            if (!in_stock) continue;
+        }
+        if (best < 0) { best = j; continue; }
+        int da = (int)t->rate - hz; if (da < 0) da = -da;
+        int db = (int)nodes[best].rate - hz; if (db < 0) db = -db;
+        if (da < db || (da == db && t->rate > nodes[best].rate)) best = j;
+    }
+    return best;
+}
+
 /* 解析 <...> 内的 u32 cell 数组 (电池补丁节定义, patch_dts 的 dyn-clk 改写亦使用) */
 static int parse_u32_cells(const char *val, uint32_t *cells, int max);
 
@@ -1630,14 +1664,28 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                       (cfg->min_clone && !B->is_mtk) ||
                       (cfg->gt7p2 && !B->is_mtk) ||
                       (cfg->gt7s && !B->is_mtk);
+        /* 慕容方法 (静态最小克隆): 基准节点完整克隆, 仅 name/cell-index/
+           framerate/clockrate + transfer 帧周期等比改写, porch/phy/vsync
+           保持所选基准原值; 每个目标档独立智能选基 (murong_pick_base) */
+        int murong = cfg->min_clone && !B->is_dynamic && !B->is_mtk &&
+                     !cfg->gt7p2 && !cfg->gt7s;
         char bfam[160];
         name_has_hz_suffix(B->name, bfam, sizeof(bfam));
         if (B->rate < 60) continue;
         /* 该面板生成的名字需检查冲突: 全文件所有节点名 */
         for (int ti = 0; ti < cfg->n; ti++) {
             int hz = cfg->hz[ti];
-            if (hz <= (int)B->rate) { if (verbose) fprintf(stderr, "[INFO] %s: %d <= 基准 %d，跳过\n", bfam, hz, B->rate); continue; }
-            double ratio = (double)hz / B->rate;
+            /* 慕容式智能选基: 每个目标档独立选取最近的静态原厂基准;
+               非 murong 模式保持面板最高档基准 (S 恒等于 B) */
+            int src_idx = pb[k].base_idx;
+            if (murong) {
+                int pick = murong_pick_base(nodes, nn, cfg, bfam, B->panel, hz,
+                                            stock_names, stock_n);
+                if (pick >= 0) src_idx = pick;
+            }
+            TNode *S = &nodes[src_idx];
+            if (hz <= (int)S->rate) { if (verbose) fprintf(stderr, "[INFO] %s: %d <= 基准 %d，跳过\n", bfam, hz, S->rate); continue; }
+            double ratio = (double)hz / S->rate;
             if (ratio > 1.66) { if (verbose) fprintf(stderr, "[INFO] %s: %dHz 倍率 %.2f 过高，跳过\n", bfam, hz, ratio); continue; }
             char newname[192];
             snprintf(newname, sizeof(newname), "%s_%d", bfam, hz);
@@ -1699,11 +1747,17 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                        min_clone (op13 AA569): 纯等比 margin=1.0 — 社区实机镜像
                        141:1601.05M/144:1636.83M/150:1704.51M 与 1363.20M x hz/120
                        的偏差均 <0.1%, 动态基准机型保持原拟合不扰动 */
+                    if (murong) {
+                        /* 慕容公式 (整数截断, 与 dts_tool 输出一致):
+                           clock = 基准时钟 * 目标帧率 / 基准帧率 */
+                        newclk = (uint64_t)S->clock * (uint64_t)hz / S->rate;
+                    } else {
                     double margin;
                     if (cfg->gt7p) margin = hz >= 144 ? 1.0208 : (hz >= 140 ? 1.0001 : 1.0003);
                     else if (cfg->min_clone && !B->is_dynamic) margin = 1.0;
                     else margin = hz >= 144 ? 1.0208 : (hz >= 140 ? 1.0001 : 1.0003);
                     newclk = (uint64_t)((double)B->clock * ratio * margin + 0.5);
+                    }
                     if (tr) { newclk = tr->clk; dyn0 = tr->dyn0; }
                 } else {
                     double margin = hz >= 160 ? cfg->margin_high : cfg->margin_low;
@@ -1715,6 +1769,15 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                 }
             }
             uint32_t ntransfer = 0;
+            if (murong && S->has_transfer) {
+                /* 慕容公式 (整数截断, 与 dts_tool 输出一致):
+                   transfer = 基准 transfer * 基准帧率 / 目标帧率;
+                   95% 帧周期钳制为黑砖保险 (等比保持基准占比, 正常不触发) */
+                uint32_t cap_tt = (uint32_t)(1000000.0 / hz * 0.95);
+                ntransfer = (uint32_t)((uint64_t)S->transfer * S->rate / hz);
+                if (ntransfer > cap_tt) ntransfer = cap_tt;
+                if (ntransfer < 100) ntransfer = 100;
+            } else
             if (B->has_transfer) {
                 if (cfg->min_clone && !B->is_dynamic) {
                     /* min_clone 静态基准: porch/phy 保持基准原值 (DDIC 时序安全),
@@ -1739,16 +1802,16 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                 }
             }
             uint32_t nvsync = B->has_vsync ? (uint32_t)((double)B->vsync * B->rate / hz + 0.5) : 0;
-            /* 生成克隆行 */
-            int cap = B->end - B->start + 16;
+            /* 生成克隆行 (murong: 从智能选基所得 S 完整克隆, 非 murong 时 S 即 B) */
+            int cap = S->end - S->start + 16;
             char **cl = xmalloc(sizeof(char*) * cap); int cn = 0;
-            for (int j = B->start; j < B->end; j++) {
+            for (int j = S->start; j < S->end; j++) {
                 const char *src = d->lines[j];
                 char *ws = lead_ws(src);
                 char pn[160]; const char *val;
                 int pr = parse_prop_line(src, pn, sizeof(pn), &val);
                 int patched = 0;
-                if (j == B->start) {
+                if (j == S->start) {
                     /* 节点名行: 替换名字 */
                     const char *np = src; while (*np == ' ' || *np == '\t') np++;
                     char *brace = strchr((char*)np, '{');
@@ -1764,13 +1827,13 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                            保留会导致 dtc duplicated phandle 错误 (如一加15 wqhd_plus 时序) */
                         patched = 1; /* 置位即跳过该行 */
                     }
-                    else if (B->has_cidx && !strcmp(pn, "cell-index")) {
+                    else if (S->has_cidx && !strcmp(pn, "cell-index")) {
                         /* 克隆档分配面板内唯一 cell-index: op13t AA594 等面板驱动按
                            cell-index 索引 timing, 复制基准值会与基准档冲突,
                            导致"有超频档位但切换后实际仍为基准刷新率" */
                         uint32_t nc = 0;
                         for (int q = 0; q < npci; q++)
-                            if (pcidx_panel[q] == B->panel) { nc = pcidx_next[q]++; break; }
+                            if (pcidx_panel[q] == S->panel) { nc = pcidx_next[q]++; break; }
                         if (nc) cl[cn++] = fmt_line(ws, "cell-index = <0x%x>;", nc);
                         else cl[cn++] = xstrdup(src);   /* 兜底: 未查到计数器保留原值 */
                         patched = 1;
@@ -1818,20 +1881,21 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                         cl[cn++] = fmt_line(ws, "qcom,mdss-mdp-transfer-time-us = <0x%x>;", tr->transfer); patched = 1;
                     }
                     else if (!cfg->gt7p && !dyn_min && !strcmp(pn, "oplus,apollo-panel-vsync-width") && nvsync) { cl[cn++] = fmt_line(ws, "oplus,apollo-panel-vsync-width = <0x%x>;", nvsync); patched = 1; }
-                    else if (!strcmp(pn, "oplus,adfr-min-fps-mapping-table") && B->has_adfr) {
-                        /* GT7P adfr: 首 cell 用实测值 (130 档为 131), 142/144 档次 cell 60->72 */
+                    else if (!strcmp(pn, "oplus,adfr-min-fps-mapping-table") && S->has_adfr) {
+                        /* GT7P adfr: 首 cell 用实测值 (130 档为 131), 142/144 档次 cell 60->72;
+                           murong: 首 cell 对齐目标档位值, 其余 cell 保持所选基准原值 */
                         int g2 = cfg->gt7p && (tr ? tr->adfr2 != 0 : hz >= 142);
-                        if (cfg->gt7p && g2 && B->adfr_rest2[0])
+                        if (cfg->gt7p && g2 && S->adfr_rest2[0])
                             cl[cn++] = fmt_line(ws, "oplus,adfr-min-fps-mapping-table = <0x%x 0x%x %s>;",
-                                tr ? tr->adfr1 : (uint32_t)hz, tr ? tr->adfr2 : 72u, B->adfr_rest2);
+                                tr ? tr->adfr1 : (uint32_t)hz, tr ? tr->adfr2 : 72u, S->adfr_rest2);
                         else if (cfg->gt7p && g2)
                             cl[cn++] = fmt_line(ws, "oplus,adfr-min-fps-mapping-table = <0x%x 0x%x>;",
                                 tr ? tr->adfr1 : (uint32_t)hz, tr ? tr->adfr2 : 72u);
                         else if (cfg->gt7p)
                             cl[cn++] = fmt_line(ws, "oplus,adfr-min-fps-mapping-table = <0x%x %s>;",
-                                tr ? tr->adfr1 : (uint32_t)hz, B->adfr_rest);
+                                tr ? tr->adfr1 : (uint32_t)hz, S->adfr_rest);
                         else
-                            cl[cn++] = fmt_line(ws, "oplus,adfr-min-fps-mapping-table = <0x%x %s>;", hz, B->adfr_rest);
+                            cl[cn++] = fmt_line(ws, "oplus,adfr-min-fps-mapping-table = <0x%x %s>;", hz, S->adfr_rest);
                         patched = 1;
                     }
                     else if (!cfg->gt7p && !dyn_min && !strcmp(pn, "qcom,mdss-dsi-panel-phy-timings") && B->has_phy == 1 && cfg->modify_phy) {
@@ -1857,23 +1921,27 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             /* 简化: 按 hz 升序生成, 依次插到 base 前 → 最终顺序为 …, 小, 大, base? 不对。
                依次插入同一位置: 插入序 hz 升序 → 每次新行放在上一个克隆之前 → 最终呈现降序? 
                直接收集: 同一 base 的多个克隆, 生成时按 hz 降序追加到同一个块里。 */
-            if (nins > 0 && ins[nins-1].at == B->start) {
+            if (nins > 0 && ins[nins-1].at == S->start) {
                 /* 追加到已有块: 保持降序 → 新的 hz 若更小应插在前面? 我们在外层 ti 从大到小遍历 cfg->hz, 因此后到的更小, 应排在已有块之后? 教程顺序: 165,144,120(降序) */
                 ins[nins-1].lines = xrealloc(ins[nins-1].lines, sizeof(char*) * (ins[nins-1].n + cn));
                 memcpy(ins[nins-1].lines + ins[nins-1].n, cl, sizeof(char*) * cn);
                 ins[nins-1].n += cn;
                 free(cl);
             } else {
-                ins[nins].at = B->start;
+                ins[nins].at = S->start;
                 ins[nins].lines = cl; ins[nins].n = cn;
                 nins++;
                 if (nins >= 512) die("插入块过多");
             }
             added++;
-            /* gt7p2 克隆静态节点 (无 dyn-clk-list), 不计入动态克隆数 */
-            if (dyn_min && !cfg->gt7p2) dyn_added++;
+            /* gt7p2 克隆静态节点 (无 dyn-clk-list), 不计入动态克隆数;
+               murong 静态克隆同理不计入 */
+            if (dyn_min && !cfg->gt7p2 && !murong) dyn_added++;
             if (verbose) {
-                if (cfg->gt7p)
+                if (murong)
+                    fprintf(stderr, "[OK] %s(%uHz 智能选基) -> 新增 %s [慕容方法] (clock=%llu transfer=%u porch/phy/vsync/adfr首cell外=基准原值)\n",
+                        S->name, S->rate, newname, (unsigned long long)newclk, ntransfer);
+                else if (cfg->gt7p)
                     fprintf(stderr, "[OK] %s -> 新增 %s (clock=%llu dyn-clk0=%llu adfr=%u%s transfer=%s)\n",
                         B->name, newname, (unsigned long long)newclk, (unsigned long long)dyn0,
                         tr ? tr->adfr1 : (uint32_t)hz,
@@ -2970,7 +3038,7 @@ static void timing_family(const char *name, char *fam, size_t famsz) {
    阈值 = 原厂真实最高档 (含 165 原厂档机型), 原厂节点永不误剥。
    unknown 机型阈值未知, 不剥离 (0)。 */
 static uint32_t strip_above_for(const char *code) {
-    if (!strcmp(code, "ace6u")) return 165;                     /* ACE6至尊(MTK) 原厂 165 (仅KO方案, 此值备用) */
+    if (!strcmp(code, "ace6u")) return 165;                     /* ACE6至尊(MTK) 原厂 165 (DTBO 方案剥离旧 OC 克隆) */
     if (!strcmp(code, "ace6") || !strcmp(code, "ace6t") ||      /* 165Hz LTPO 原厂 165 */
         !strcmp(code, "op15") || !strcmp(code, "op15t")) return 165;
     if (!strcmp(code, "gt8") || !strcmp(code, "gt8p")) return 144;  /* GT8/8Pro 原厂 144 */
