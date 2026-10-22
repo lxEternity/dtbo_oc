@@ -218,8 +218,10 @@ CHOICES=""
 case "$DEVICE" in
     # 原厂120可超185: ACE2Pro (无130)
     ace2pro)   CHOICES="132 138 141 144 150 158 165 170 178 185"; DEF_HZ=144 ;;
+    # 一加13: 引用式克隆 (社区实机验证镜像同款方法, 仅 130/141/144/150 四档)
+    op13)      CHOICES="130 141 144 150"; DEF_HZ=144 ;;
     # 原厂120可超144→放开到150
-    op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) CHOICES="130 132 138 141 144 148 150"; DEF_HZ=144 ;;
+    op12|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) CHOICES="130 132 138 141 144 148 150"; DEF_HZ=144 ;;
     # 原厂120可超185: GT7 Pro/GT7S (165实测不开机保留移除)
     gt7s)      CHOICES="130 132 138 141 144 148 150 158 170 178 185"; DEF_HZ=185 ;;
     # GT7P竞速版 --gt7p 模式实测表
@@ -244,7 +246,8 @@ log "机型识别: $DEVNAME ($DEVICE)"
 PLANS=""
 case "$DEVICE" in
     ace2pro)     PLANS="144 165 185" ;;
-    op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) PLANS="144" ;;
+    op13)        PLANS="144 150" ;;
+    op12|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) PLANS="144" ;;
     op15|op15t|ace6) PLANS="185 188 190 195 198" ;;
     gt8)         PLANS="144 165 185 188 190 195 198" ;;
     gt7p)        PLANS="130 142 144" ;;
@@ -393,8 +396,12 @@ PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --workdir $WORK"
 [ "$DEVICE" = "gt7p" ] && PATCH_ARGS="$PATCH_ARGS --gt7p"
 [ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2 --min-clone"
 [ "$STRIP" != "0" ] && PATCH_ARGS="$PATCH_ARGS --strip-above $STRIP"
-[ "$DEVICE" = "op13" ] && PATCH_ARGS="$PATCH_ARGS --include-family wqhd_sdc --min-clone"
+[ "$DEVICE" = "op13" ] && PATCH_ARGS="$PATCH_ARGS --include-family wqhd_sdc --ref-clone --include-panel AA569_P_3_A0019_dsc_cmd"
 # 机型方法映射 (对齐慕容显示增强, 档位仍用本模块预设):
+# op13 (一加13) → 引用式克隆: 完全复刻社区实机验证镜像 (150档可开机) 的修改方法 —
+#   克隆 AA569 量产面板 120 档, 仅改 节点名/adfr映射表首cell/clock/framerate 四处,
+#   cell-index 保持 0x00 / transfer/porch/phy/vsync 及全部 DSI 命令保持基准原值
+#   (v2.51 旧 min-clone 给新档分配 cell-index 0x03+ 是不开机根因)
 # ace3/ace3pro/ace5/ace5p/op13t → 一加12方法: oplus+sdc 双供应商家族各克隆一组
 #   (multifam) + 慕容式智能选基 (min-clone: clock/transfer 纯等比, porch/phy 原值)
 # ace6u/ace6t/op15t/op15/ace6 → 一加15方法: min-clone 慕容式智能选基

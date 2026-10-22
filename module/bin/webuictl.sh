@@ -444,8 +444,10 @@ esac
 case "$DEVICE" in
     # 原厂120可超185: ACE2Pro (无130)
     ace2pro)   CHOICES="132 138 141 144 150 158 165 170 178 185" ;;
+    # 一加13: 引用式克隆 (社区实机验证镜像同款方法, 仅 130/141/144/150 四档)
+    op13)      CHOICES="130 141 144 150" ;;
     # 原厂120可超144→放开到150
-    op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) CHOICES="130 132 138 141 144 148 150" ;;
+    op12|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) CHOICES="130 132 138 141 144 148 150" ;;
     # 原厂120可超185: GT7 Pro/GT7S (165实测不开机保留移除)
     gt7s)      CHOICES="130 132 138 141 144 148 150 158 170 178 185" ;;
     # GT7P竞速版 --gt7p 模式实测表
@@ -468,7 +470,8 @@ esac
 PLANS=""
 case "$DEVICE" in
     ace2pro)     PLANS="144 165 185" ;;
-    op12|op13|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) PLANS="144" ;;
+    op13)        PLANS="144 150" ;;
+    op12|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) PLANS="144" ;;
     op15|op15t|ace6) PLANS="185 188 190 195 198" ;;
     gt8)         PLANS="144 165 185 188 190 195 198" ;;
     gt7p)        PLANS="130 142 144" ;;

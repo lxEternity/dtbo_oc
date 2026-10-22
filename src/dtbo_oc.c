@@ -789,8 +789,10 @@ static int avb_parse_footer_at(const uint8_t *b, size_t n, int64_t total, int f,
     int64_t off = (int64_t)be64(b+f+20);
     int64_t size = (int64_t)be64(b+f+28);
     if (size < 256) return -1;
-    int64_t m = total > orig ? total : orig;
-    if (off < m || off + size > f) return -1;
+    /* 只要求 vbmeta 位于 DTBO payload 之后; footer.orig_image_size 是元数据,
+       社区重组镜像 (实机验证可开机) 可能保留旧值 orig > off — 区域间全零
+       校验 (inspect 后续) 保证 [total, vbmeta) 无幽灵数据, 安全性不降级 */
+    if (off < total || off + size > f) return -1;
     if (!avb_bounded(off, (int64_t)n) || !avb_bounded(size, (int64_t)n)) return -1;
     out->footer = f; out->orig_size = (int)orig; out->major = major; out->minor = minor;
     out->vbmeta = (int)off; out->size = (int)size;
@@ -922,14 +924,29 @@ static void avb_inspect(const uint8_t *b, size_t n, int64_t total, AvbInfo *info
             info->hash_digest_off = (int)(p + 132 + name_sz + salt_sz);
             info->hash_digest_len = (int)dig_sz;
             /* 长度字段必须与 total 一致 */
-            if ((int64_t)be64(b+p+16) != total) die("AVB 哈希覆盖范围与 DTBO total_size 不一致");
+            if ((int64_t)be64(b+p+16) != total) {
+                /* 陈旧描述符 (社区重组镜像: vbmeta 保留自更早系统版本, 描述符指向
+                   旧 DTBO 范围且摘要失配 — 修改工具原样保留 vbmeta, 实机可开机)。
+                   告警并忽略该描述符: 重建时 vbmeta 逐字节保持原样, 行为与镜像
+                   现状等价 */
+                fprintf(stderr, "[WARN] AVB hash descriptor image_size (%lld) 与 DTBO total (%lld) 不一致, 按陈旧描述符忽略\n",
+                        (long long)be64(b+p+16), (long long)total);
+                info->hash_desc_off = 0;
+                p = next;
+                continue;
+            }
             fields++;
         } else if (tag != 0) {
             if (!signed_) die("暂不支持重建 AVB descriptor 类型 %lld", (long long)tag);
         }
         p = next;
     }
-    if (fields != 1) die("需要唯一的 dtbo AVB hash descriptor (实际 %d)", fields);
+    if (fields > 1) die("需要唯一的 dtbo AVB hash descriptor (实际 %d)", fields);
+    if (fields == 0) {
+        /* 无 hash descriptor 的签名 vbmeta (社区重组镜像: 签名只覆盖 vbmeta 自身,
+           DTBO 内容不在签名范围) — 允许, 重建时仅需保持 footer/vbmeta 布局 */
+        return;
+    }
     /* 摘要校验 */
     uint8_t calc[64];
     if (info->hash_alg == 0) sha256_2buf(b + info->hash_salt_off, info->hash_salt_len, b, total, calc);
@@ -955,10 +972,12 @@ static uint8_t *avb_rebuild(const uint8_t *orig, size_t orig_n, int orig_total,
         return r;
     }
     AvbLayout *L = &info.layout;
-    if (L->orig_size != orig_total) die("AVB footer 原始大小与 DTBO 不匹配");
+    if (L->orig_size != orig_total)
+        fprintf(stderr, "[WARN] AVB footer 原始大小 (%d) 与 DTBO total (%d) 不一致 (社区重组镜像?), 继续重建\n",
+                L->orig_size, orig_total);
     uint8_t *vbmeta = xmalloc((size_t)L->size);
     memcpy(vbmeta, orig + L->vbmeta, (size_t)L->size);
-    if (!L->detached) {
+    if (!L->detached && info.hash_desc_off > 0) {
         /* 更新 hash descriptor 的 image_size 与 digest(偏移相对镜像 → 相对 vbmeta) */
         int64_t ds_off = (int64_t)info.hash_desc_off - L->vbmeta;
         put64(vbmeta + ds_off + 16, payload_n);
@@ -1018,6 +1037,9 @@ typedef struct {
                                        索引 timing 档位, 克隆档必须分配面板内唯一新值,
                                        复制基准值会与基准档冲突导致切换命中错误档位 */
     uint8_t phy[128]; int phy_len;
+    char panel_name[192];                   /* 所属面板节点名 (qcom,mdss_dsi_panel_xxx):
+                                               ref_clone 面板白名单过滤用 (_evb/_evt 工程
+                                               面板与其他供应商面板可精确排除) */
     int adfr_cells[8]; int adfr_n;          /* 解析出的 cell 值 */
     char adfr_rest[256];                    /* 第二个 cell 起的原始文本 */
     char adfr_rest2[256];                   /* 第三个 cell 起的原始文本 (gt7p 144 档第二 cell 需替换) */
@@ -1198,7 +1220,17 @@ static int scan_timing_nodes(Dts *d, TNode *nodes, int max_nodes) {
             if (depth_after[j] != d0 - 1) continue;          /* timings 容器内部, 跳过 */
             const char *q = d->lines[j]; size_t ql = strlen(q);
             while (ql > 0 && (q[ql-1] == ' ' || q[ql-1] == '\t')) ql--;
-            if (ql > 0 && q[ql-1] == '{') { tn->panel = j; break; }
+            if (ql > 0 && q[ql-1] == '{') {
+                tn->panel = j;
+                /* 面板节点名 (不含 '{' 与尾空白): qcom,mdss_dsi_panel_AA569_P_3_A0019_dsc_cmd */
+                const char *ps = q;
+                while (*ps == ' ' || *ps == '\t') ps++;
+                size_t pnl = ql - 1 - (size_t)(ps - q);
+                while (pnl > 0 && (ps[pnl-1] == ' ' || ps[pnl-1] == '\t')) pnl--;
+                if (pnl >= sizeof(tn->panel_name)) pnl = sizeof(tn->panel_name) - 1;
+                memcpy(tn->panel_name, ps, pnl); tn->panel_name[pnl] = 0;
+                break;
+            }
         }
         /* 属性扫描 */
         for (int j = i + 1; j < end; j++) {
@@ -1369,11 +1401,21 @@ typedef struct {
                        一组; 其余机型默认每面板仅克隆最高基准所在家族避免重复档位) */
     uint32_t strip_above;  /* 剥离 rate > 此值的时序节点 (旧版模组 OC 克隆清理,
                               0 = 不剥离; 由 identify 按机型原厂最高档输出) */
-    int min_clone;  /* 静态最小克隆 (op12/op13/op13t/ace5/ace5p 静态基): porch/phy/
+    int min_clone;  /* 静态最小克隆 (op12/op13t/ace5/ace5p 静态基): porch/phy/
                        vsync/transfer 全部原样, 仅 framerate + clockrate 纯等比缩放
-                       (基准 x hz/base_hz), 一加13 社区实机验证模型 (镜像 130/141/
-                       144/150 档 porch/phy/transfer 与基准逐字节一致, 时钟等比
-                       margin=1.0 偏差<0.1%); 动态基机型不受影响 (保持 dyn_min) */
+                       (基准 x hz/base_hz); 动态基机型不受影响 (保持 dyn_min) */
+    int ref_clone;  /* 引用式克隆 (op13 专用): 完全复刻社区实机验证镜像的修改方法 —
+                       克隆同面板原厂 120 档节点, 仅改 4 处 (节点名 / adfr 映射表
+                       首 cell / clockrate / framerate), 其余全部逐字节保持基准
+                       原值 (cell-index=0x00 / transfer / porch / phy / vsync /
+                       全部 DSI 命令); clock 用 OP13_RATES 实测表 (无实测档位
+                       纯等比兜底); v2.39-v2.51 一加13 不开机的根因即偏离此方法
+                       (克隆档 cell-index 被分配新值 0x03+ / transfer 被缩放);
+                       配合 include_panel 面板白名单仅克隆实证可用面板 */
+    char include_panel[256];  /* 面板名后缀白名单 (逗号分隔): 仅面板节点名以指定
+                                 后缀结尾的面板参与克隆 (如 AA569_P_3_A0019_dsc_cmd
+                                 精确匹配量产面板, 排除 _evb/_evt 工程面板与其他
+                                 供应商面板); 空 = 不过滤 */
     int gt7p2;  /* GT7 Pro 竞速版新平台 (lafa/AC180): 静态最小克隆 — 基准固定原厂
                    120 档, porch/phy/vsync/adfr 保留原值, 仅改 name/framerate/
                    clockrate/transfer; margin 复用 GT7P 实测 (>=144:1.0208, 与
@@ -1408,6 +1450,26 @@ static const Gt7pRate *gt7p_rate(int hz) {
     for (size_t i = 0; i < sizeof(GT7P_RATES) / sizeof(GT7P_RATES[0]); i++)
         if (GT7P_RATES[i].hz == hz) return &GT7P_RATES[i];
     return NULL;
+}
+
+/* 一加13 (AA569/wqhd_sdc) 引用式克隆实测表 (社区实机镜像逐属性提取):
+   镜像方法: 克隆同面板 timing@wqhd_sdc_120, 仅改 4 处 — 节点名 /
+   oplus,adfr-min-fps-mapping-table 首 cell / clockrate / framerate;
+   其余 (cell-index=0x00 / transfer=0x1a40 / porch / phy / DSI 命令)
+   与 120 基准逐字节一致。130 档 clock 与原厂 60Hz 档相同 (1470415872),
+   141/144/150 与 120 等比缩放偏差 <0.1%; 无实测档位 (132/138/148)
+   用 120 基准纯等比兜底 (1363200000 x hz/120) */
+typedef struct { int hz; uint64_t clk; } Op13Rate;
+static const Op13Rate OP13_RATES[] = {
+    { 130, 1470415872ull },
+    { 141, 1601048576ull },
+    { 144, 1636827136ull },
+    { 150, 1704511488ull },
+};
+static uint64_t op13_clk(int hz) {
+    for (size_t i = 0; i < sizeof(OP13_RATES) / sizeof(OP13_RATES[0]); i++)
+        if (OP13_RATES[i].hz == hz) return OP13_RATES[i].clk;
+    return 0;
 }
 
 /* 生成克隆行块: 返回行数组 */
@@ -1558,6 +1620,19 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                 if (strstr(fam, tok)) { ok = 1; break; }
             if (!ok) continue;
         }
+        if (cfg->include_panel[0]) {
+            /* 面板名后缀白名单 (ref_clone): 逗号分隔任一面板名后缀匹配;
+               后缀匹配而非子串 — "AA569_P_3_A0019_dsc_cmd" 精确命中量产面板,
+               不会误中 "..._dsc_cmd_evb/_evt" 工程面板 */
+            char tmp[300]; snprintf(tmp, sizeof(tmp), "%s", cfg->include_panel);
+            int ok = 0; char *save, *tok;
+            size_t pl = strlen(t->panel_name);
+            for (tok = strtok_r(tmp, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+                size_t tl = strlen(tok);
+                if (pl >= tl && !strcmp(t->panel_name + pl - tl, tok)) { ok = 1; break; }
+            }
+            if (!ok) continue;
+        }
         int found = -1;
         for (int k = 0; k < npb; k++)
             if (pb[k].panel == t->panel &&
@@ -1568,9 +1643,10 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             snprintf(pb[npb].fam, sizeof(pb[npb].fam), "%s", fam);
             npb++; continue;
         }
-        if (cfg->gt7p || cfg->gt7p2) {
-            /* gt7p/gt7p2: 基准固定为原厂 120 档 (实机验证基准);
-               防止已含 OC 档 (130/142/144) 的镜像把克隆档误选为基准 */
+        if (cfg->gt7p || cfg->gt7p2 || cfg->ref_clone) {
+            /* gt7p/gt7p2/ref_clone: 基准固定为原厂 120 档 (实机验证基准);
+               防止已含 OC 档 (130/142/144) 的镜像把克隆档误选为基准;
+               ref_clone (op13): 实证镜像全部档位均克隆自 120 档 */
             if (t->rate == 120) pb[found].base_idx = i;
         } else if (nodes[pb[found].base_idx].rate < t->rate) pb[found].base_idx = i;
     }
@@ -1611,8 +1687,10 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
     /* cell-index 去重: 旧版本克隆档复制了基准档的 cell-index, 与基准冲突导致
        "有超频档位但切换后仍为基准刷新率"; 克隆块插在基准节点之前, 行序遍历
        先遇到克隆档(先占用者)后遇到原厂基准 → 修正"先占用者"(克隆档),
-       保留后到者(原厂基准), 保证原厂档 index 不被改动 */
-    {
+       保留后到者(原厂基准), 保证原厂档 index 不被改动;
+       ref_clone (op13) 例外: 实证镜像克隆档 cell-index 本就与基准一致 (0x00),
+       同 index 是设计而非冲突, 去重反而会把原厂基准改成新值导致不开机 */
+    if (!cfg->ref_clone) {
         static uint8_t used[64][256];
         static int first_holder[64][256];
         int fixed_cidx = 0;
@@ -1663,12 +1741,14 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
         int dyn_min = (B->is_dynamic && !cfg->gt7p && !B->is_mtk) ||
                       (cfg->min_clone && !B->is_mtk) ||
                       (cfg->gt7p2 && !B->is_mtk) ||
-                      (cfg->gt7s && !B->is_mtk);
+                      (cfg->gt7s && !B->is_mtk) ||
+                      (cfg->ref_clone && !B->is_mtk);
         /* 慕容方法 (静态最小克隆): 基准节点完整克隆, 仅 name/cell-index/
            framerate/clockrate + transfer 帧周期等比改写, porch/phy/vsync
-           保持所选基准原值; 每个目标档独立智能选基 (murong_pick_base) */
+           保持所选基准原值; 每个目标档独立智能选基 (murong_pick_base);
+           ref_clone 走独立分支 (cell-index/transfer 也保持原值) */
         int murong = cfg->min_clone && !B->is_dynamic && !B->is_mtk &&
-                     !cfg->gt7p2 && !cfg->gt7s;
+                     !cfg->gt7p2 && !cfg->gt7s && !cfg->ref_clone;
         char bfam[160];
         name_has_hz_suffix(B->name, bfam, sizeof(bfam));
         if (B->rate < 60) continue;
@@ -1744,13 +1824,17 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                     /* GT7P/动态基准最小克隆: porch 保持原值 (hvn==hvo), 时钟线性缩放;
                        GT7P 实测档位 (130/142/144) 直接用实机验证值, 未实测档位用拟合 margin
                        (由实测值反推: 144:1.0208, 142:1.0001, 130:1.0003);
-                       min_clone (op13 AA569): 纯等比 margin=1.0 — 社区实机镜像
-                       141:1601.05M/144:1636.83M/150:1704.51M 与 1363.20M x hz/120
-                       的偏差均 <0.1%, 动态基准机型保持原拟合不扰动 */
+                       min_clone: 纯等比 margin=1.0, 动态基准机型保持原拟合不扰动;
+                       ref_clone (op13): OP13_RATES 实测表优先, 无实测档位纯等比兜底 */
                     if (murong) {
                         /* 慕容公式 (整数截断, 与 dts_tool 输出一致):
                            clock = 基准时钟 * 目标帧率 / 基准帧率 */
                         newclk = (uint64_t)S->clock * (uint64_t)hz / S->rate;
+                    } else if (cfg->ref_clone) {
+                        /* 引用式克隆: 实证镜像 clock 值 (130 档 1470415872 与原厂
+                           60Hz 档一致, 非等比值; 141/144/150 等比偏差 <0.1%) */
+                        uint64_t t = op13_clk(hz);
+                        newclk = t ? t : (uint64_t)S->clock * (uint64_t)hz / S->rate;
                     } else {
                     double margin;
                     if (cfg->gt7p) margin = hz >= 144 ? 1.0208 : (hz >= 140 ? 1.0001 : 1.0003);
@@ -1769,6 +1853,11 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                 }
             }
             uint32_t ntransfer = 0;
+            if (cfg->ref_clone) {
+                /* 引用式克隆 (op13): transfer 保持基准原值 — 实证镜像 130-150 档
+                   transfer-time-us 与 120 基准逐字节一致 (0x1a40=6720us, 150Hz 档
+                   亦保持, 实机可开机, 推翻 transfer 超帧周期即黑砖的旧假设) */
+            } else
             if (murong && S->has_transfer) {
                 /* 慕容公式 (整数截断, 与 dts_tool 输出一致):
                    transfer = 基准 transfer * 基准帧率 / 目标帧率;
@@ -1827,10 +1916,12 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                            保留会导致 dtc duplicated phandle 错误 (如一加15 wqhd_plus 时序) */
                         patched = 1; /* 置位即跳过该行 */
                     }
-                    else if (S->has_cidx && !strcmp(pn, "cell-index")) {
+                    else if (S->has_cidx && !cfg->ref_clone && !strcmp(pn, "cell-index")) {
                         /* 克隆档分配面板内唯一 cell-index: op13t AA594 等面板驱动按
                            cell-index 索引 timing, 复制基准值会与基准档冲突,
-                           导致"有超频档位但切换后实际仍为基准刷新率" */
+                           导致"有超频档位但切换后实际仍为基准刷新率";
+                           ref_clone (op13) 例外: 实证镜像克隆档 cell-index 与基准
+                           逐字节一致 (0x00), 分配新值 (0x03+) 反而导致不开机 */
                         uint32_t nc = 0;
                         for (int q = 0; q < npci; q++)
                             if (pcidx_panel[q] == S->panel) { nc = pcidx_next[q]++; break; }
@@ -1935,10 +2026,13 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             }
             added++;
             /* gt7p2 克隆静态节点 (无 dyn-clk-list), 不计入动态克隆数;
-               murong 静态克隆同理不计入 */
-            if (dyn_min && !cfg->gt7p2 && !murong) dyn_added++;
+               murong 静态克隆同理不计入; ref_clone 静态引用式克隆不计入 */
+            if (dyn_min && !cfg->gt7p2 && !murong && !cfg->ref_clone) dyn_added++;
             if (verbose) {
-                if (murong)
+                if (cfg->ref_clone)
+                    fprintf(stderr, "[OK] %s -> 新增 %s [引用式克隆] (clock=%llu 仅改 名字/adfr首cell/clock/framerate 4 处, cell-index/transfer/porch/phy/vsync=基准原值)\n",
+                        S->name, newname, (unsigned long long)newclk);
+                else if (murong)
                     fprintf(stderr, "[OK] %s(%uHz 智能选基) -> 新增 %s [慕容方法] (clock=%llu transfer=%u porch/phy/vsync/adfr首cell外=基准原值)\n",
                         S->name, S->rate, newname, (unsigned long long)newclk, ntransfer);
                 else if (cfg->gt7p)
@@ -3276,8 +3370,15 @@ int main(int argc, char **argv) {
             "                clock margin 实测标定 >=144:1.0208, transfer>=144 x0.884)\n"
             "      [--gt7s]  真我 GT7 Pro 最小克隆 (静态+动态面板统一 porch/phy/vsync 原值,\n"
             "                margin>=144:1.0208 GT7P 同族拟合, transfer>=142 x0.938; 修复 165 档不开机)\n"
-            "      [--min-clone] 静态最小克隆 (op12/op13/op13t/ace5/ace5p): porch/phy/vsync/\n"
-            "                transfer 全部原值, 时钟纯等比 margin=1.0 (一加13 社区实机验证模型)\n"
+            "      [--min-clone] 静态最小克隆 (op12/op13t/ace5/ace5p): porch/phy/vsync/\n"
+            "                transfer 全部原值, 时钟纯等比 margin=1.0\n"
+            "      [--ref-clone] 引用式克隆 (op13): 复刻社区实机镜像方法 — 克隆同面板 120 档\n"
+            "                仅改 节点名/adfr首cell/clockrate/framerate 4 处, cell-index/transfer/\n"
+            "                porch/phy/vsync 全部基准原值, clock 用实测表 (130/141/144/150);\n"
+            "                修复 v2.39-v2.51 一加13 超频不开机 (旧版分配新 cell-index 且缩放 transfer)\n"
+            "      [--include-panel AA569_P_3_A0019_dsc_cmd] 面板名后缀白名单 (逗号分隔):\n"
+            "                仅面板名以指定后缀结尾的面板克隆 (排除 _evb/_evt 工程面板与\n"
+            "                其他供应商面板); 与 --include-family 配合使用\n"
             "      [--batt-limit]     移除充电限流 (全机型: 老平台删qcom限流节点/新平台策略表电流拉满8000mA)\n"
             "      [--batt-uncap]    电池解容: 自定义关机电压 (1%%电量=关机+50mV, 充电中欠压=关机-100mV)\n"
             "      [--batt-voff MV]  关机电压 mV, 默认 3000, 下限 2700 (与 --batt-uncap 配合)\n"
@@ -3296,7 +3397,8 @@ int main(int argc, char **argv) {
     uint32_t batt_voff = 0, batt_full = 0;
     uint32_t strip_above = 0;
     double mlow = 1.012205, mhigh = 1.021537;
-    int no_phy = 0, verbose = 0, gt7p = 0, multifam = 0, min_clone = 0, gt7p2 = 0, gt7s = 0;
+    int no_phy = 0, verbose = 0, gt7p = 0, multifam = 0, min_clone = 0, gt7p2 = 0, gt7s = 0, ref_clone = 0;
+    const char *inc_panel = "";
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--img") && i+1 < argc) img = argv[++i];
         else if (!strcmp(argv[i], "--stock-img") && i+1 < argc) stock = argv[++i];
@@ -3325,6 +3427,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--gt7s")) gt7s = 1;
         else if (!strcmp(argv[i], "--multifam")) multifam = 1;
         else if (!strcmp(argv[i], "--min-clone")) min_clone = 1;
+        else if (!strcmp(argv[i], "--ref-clone")) ref_clone = 1;
+        else if (!strcmp(argv[i], "--include-panel") && i+1 < argc) inc_panel = argv[++i];
         else if (!strcmp(argv[i], "-v")) verbose = 1;
         else die("未知参数: %s", argv[i]);
     }
@@ -3393,6 +3497,8 @@ int main(int argc, char **argv) {
         cfg.multifam = multifam;
         cfg.strip_above = strip_above;
         cfg.min_clone = min_clone;
+        cfg.ref_clone = ref_clone;
+        snprintf(cfg.include_panel, sizeof(cfg.include_panel), "%s", inc_panel);
         if (wxh && strcmp(wxh, "auto")) {
             if (sscanf(wxh, "%ux%u", &cfg.wx, &cfg.wy) != 2) die("--wxh 格式: 宽x高 (如 1240x2772)");
             cfg.wxh_filter = 1;

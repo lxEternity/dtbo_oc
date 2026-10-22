@@ -188,6 +188,9 @@ footer{text-align:center;color:var(--footer);font-size:8px;letter-spacing:1px;ma
 .rm-empty-card strong{font-size:12.5px;color:var(--text-dim)}
 .rm-empty-card small{font-size:10.5px;line-height:1.7}
 .rm-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.rm-grid-title{grid-column:1/-1;margin-top:8px}
+.rm-grid-title:first-child{margin-top:0}
+.rm-res{font-size:7.5px;color:var(--muted);font-variant-numeric:tabular-nums;line-height:1;letter-spacing:.2px}
 .rm-choice{border:1px solid var(--line);background:rgba(var(--surface-rgb),var(--card-alpha));border-radius:12px;min-height:40px;padding:5px 2px;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
 .rm-num{font-size:14px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.2}
 .rm-unit{font-size:8px;color:var(--muted)}

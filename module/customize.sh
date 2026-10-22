@@ -17,7 +17,7 @@ if [ "$ARCH64" != "arm64-v8a" ]; then
 fi
 
 ui_print "*******************************"
-ui_print " 超频解容模块 (多机型) v2.51"
+ui_print " 超频解容模块 (多机型) v2.52"
 ui_print "*******************************"
 ui_print "- 安全架构: 安装零分区写入, 不碰校验分区"
 ui_print "- 安装二进制: dtbo_oc + dtc (静态 arm64)"
@@ -132,7 +132,7 @@ case "$DEVICE" in
     ace3)      DEF_HZ=144; CHOICES="144" ;;
     ace3pro)   DEF_HZ=144; CHOICES="144" ;;
     op12)      DEF_HZ=144; CHOICES="144" ;;
-    op13)      DEF_HZ=144; CHOICES="144" ;;
+    op13)      DEF_HZ=144; CHOICES="144/150" ;;
     op15|ace6) DEF_HZ=185; CHOICES="185/188/190/195/198" ;;
     gt8)       DEF_HZ=185; CHOICES="144/165/185/188/190/195/198" ;;
     gt7p)      DEF_HZ=144; CHOICES="130/142/144" ;;

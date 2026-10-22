@@ -419,18 +419,28 @@ function rmDraw() {
   $('rm-sub').textContent = `${daemon ? '服务运行中' : '服务已停止'} · 共 ${rates.length} 档${lockR ? ` · 锁定 ${lockR.fps}Hz` : ''}`;
   $('rm-entry-cap').textContent = gid ? `已锁定 ${lockR ? lockR.fps : gid}Hz` : '全局锁定 · 按应用切换 · 档位标注';
 
-  // ---- 全局锁定网格 ----
+  // ---- 全局锁定网格 (按分辨率分组, 星驰式两组布局, 档位下方显示分辨率) ----
   const grid = $('rm-global-grid');
   const gfrag = document.createDocumentFragment();
   const sorted = [...rates].sort((a, b) => a.fps - b.fps || a.id - b.id);
+  const groups = new Map();
   sorted.forEach(r => {
-    const on = gid === r.id;
-    const b = radioButton(`rm-choice${r.type === 'overclock' ? ' oc' : ''}${on ? ' on' : ''}`,
-      `${r.fps}Hz ${r.type === 'overclock' ? '超频' : '原生'}`, on, () => rmToggleGlobal(r.id));
-    b.append(span('rm-num', String(r.fps)), span('rm-unit', 'Hz'));
-    const tag = span('rm-tag', r.type === 'overclock' ? '超' : '原');
-    b.append(tag);
-    gfrag.append(b);
+    const key = r.w && r.h ? `${r.w}x${r.h}` : '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+  groups.forEach((items, key) => {
+    if (key) gfrag.append(span('rm-res-title rm-grid-title', `${key} · ${items.length} 档`));
+    items.forEach(r => {
+      const on = gid === r.id;
+      const b = radioButton(`rm-choice${r.type === 'overclock' ? ' oc' : ''}${on ? ' on' : ''}`,
+        `${r.fps}Hz ${r.type === 'overclock' ? '超频' : '原生'}`, on, () => rmToggleGlobal(r.id));
+      b.append(span('rm-num', String(r.fps)), span('rm-unit', 'Hz'));
+      const tag = span('rm-tag', r.type === 'overclock' ? '超' : '原');
+      b.append(tag);
+      if (key) b.append(span('rm-res', key));
+      gfrag.append(b);
+    });
   });
   grid.replaceChildren(gfrag);
   $('rm-lock-caption').textContent = lockR ? `已锁定 ${lockR.fps}Hz` : '未锁定 (系统自动调频)';
