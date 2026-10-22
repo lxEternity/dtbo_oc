@@ -64,14 +64,9 @@
       <span class="rme-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg></span>
     </button>
 
-    <section class="setting-section" aria-labelledby="batt-heading">
-      <div class="section-heading"><h2 id="batt-heading">电池 / 充电方案</h2><span id="batt-caption">自动识别中</span></div>
-      <div id="batts" class="batt-grid" role="radiogroup" aria-label="选择电池方案"><div class="placeholder">正在读取可用方案…</div></div>
-    </section>
-
     <button id="chg-entry" class="rm-entry" type="button">
-      <span class="rme-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z"/></svg></span>
-      <span class="rme-text"><strong>充电控制</strong><small id="chg-entry-cap">模拟恒压 · 协议开关 · 充电温控</small></span>
+      <span class="rme-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 2v10c-1.7.9-3 2.9-3 5a6 6 0 0 0 12 0c0-2.1-1.3-4.1-3-5V2Z"/><path d="M12 2v4M9.5 2v3M14.5 2v3"/></svg></span>
+      <span class="rme-text"><strong>充电相关</strong><small id="chg-entry-cap">限流 · 解容 · 满充 · 魔改电池</small></span>
       <span class="rme-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg></span>
     </button>
 
@@ -144,75 +139,34 @@
     <div class="rm-sheet">
       <header class="rm-topbar">
         <button id="chg-back" class="rm-back" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>返回主页</button>
-        <div class="rm-title"><h2>充电控制</h2><span id="chg-sub">正在读取…</span></div>
-        <button id="chg-stop" class="mini-btn ghost danger" type="button">停止服务</button>
+        <div class="rm-title"><h2>充电相关</h2><span id="chg-sub">正在读取…</span></div>
+        <button id="chg-off" class="mini-btn ghost" type="button">全部关闭</button>
       </header>
       <div class="rm-body">
         <div id="chg-notice" class="notice" role="status" aria-live="polite" hidden></div>
 
-        <section class="rm-section" id="chg-unsupported" hidden>
-          <div class="rm-empty-card">
-            <strong>本机不支持恒压控制</strong>
-            <small>未检测到 /proc/oplus-votable 内核接口 (oplus_chg_v2 框架)。<br>仅 ColorOS 15+ 搭载 oplus_chg_v2 充电驱动的机型可用。</small>
-          </div>
-        </section>
-
-        <section class="rm-section" id="chg-live-section">
-          <div class="section-heading"><h2>实时状态</h2><span id="chg-live-cap">—</span></div>
-          <div class="chg-live">
-            <div class="chg-live-item"><small>电压</small><b id="chg-vbat">—</b><i>mV</i></div>
-            <div class="chg-live-item"><small>电流</small><b id="chg-ichg">—</b><i>mA</i></div>
-            <div class="chg-live-item"><small>温度</small><b id="chg-temp">—</b><i>°C</i></div>
-            <div class="chg-live-item"><small>电量</small><b id="chg-soc">—</b><i>%</i></div>
-          </div>
-          <div class="chg-stage"><span>当前阶段 <b id="chg-stage">—</b></span><span id="chg-target">—</span></div>
-        </section>
-
-        <section class="rm-section">
-          <div class="section-heading"><h2>模拟恒压</h2><span>关闭后使用官方充电曲线</span></div>
-          <label class="avb-toggle" for="chg-enabled"><span>恒压总开关</span><input id="chg-enabled" type="checkbox" role="switch"></label>
-        </section>
-
-        <section class="rm-section">
-          <div class="section-heading"><h2>协议与旁路</h2><span>控制快充协议可用性</span></div>
-          <div class="chg-rows">
-            <label class="avb-toggle" for="chg-ufcs"><span>UFCS 协议</span><input id="chg-ufcs" type="checkbox" role="switch"></label>
-            <label class="avb-toggle" for="chg-pps"><span>PPS 协议</span><input id="chg-pps" type="checkbox" role="switch"></label>
-            <label class="avb-toggle" for="chg-svooc"><span>SVOOC 协议</span><input id="chg-svooc" type="checkbox" role="switch"></label>
-            <label class="avb-toggle" for="chg-plc"><span>忽略旁路充电</span><input id="chg-plc" type="checkbox" role="switch"></label>
-            <label class="avb-toggle" for="chg-faket"><span>电池温度伪装 (36°C)</span><input id="chg-faket" type="checkbox" role="switch"></label>
-          </div>
-        </section>
-
-        <section class="rm-section">
-          <div class="section-heading"><h2>恒压参数</h2><span>高级电流与策略配置</span></div>
-          <div class="chg-rows" id="chg-params"></div>
-        </section>
-
-        <section class="rm-section">
-          <div class="section-heading"><h2>充电温控</h2><span>舒适与极限温控策略</span></div>
-          <div class="chg-rows">
-            <div class="chg-row">
-              <div class="chg-row-head"><span>温控模式</span></div>
-              <div class="rc-types chg-mode-seg" role="radiogroup" aria-label="温控模式">
-                <button type="button" class="rc-seg" data-mode="comfort">舒适模式</button>
-                <button type="button" class="rc-seg" data-mode="limit">极限模式</button>
-              </div>
+        <section class="rm-section" aria-labelledby="chg-sw-heading">
+          <div class="section-heading"><h2 id="chg-sw-heading">功能开关</h2><span id="chg-sw-caption">—</span></div>
+          <div class="chg-body">
+            <label class="avb-toggle" for="chg-limit"><span>解除充电限流<small class="chg-note">删除 DTBO 限流节点 / 策略表充电电流翻倍</small></span><input id="chg-limit" type="checkbox" role="switch"></label>
+            <label class="avb-toggle" for="chg-uncap"><span>电池解容<small class="chg-note">自定义关机电压, 释放底部隐藏电量, 显示真实电量</small></span><input id="chg-uncap" type="checkbox" role="switch"></label>
+            <div class="chg-param" id="chg-voff-box" hidden>
+              <label class="avb-toggle" for="chg-voff"><span>关机电压 <b id="chg-voff-v">3000</b> mV</span><input id="chg-voff" type="range" min="2700" max="3350" step="50"></label>
+              <p class="chg-hint">1% 电量电压 = 关机 +50mV (<b id="chg-voff-p1">3050</b>mV) · 充电中欠压阈值 = 关机 -100mV · 下限 2700mV</p>
             </div>
-            <label class="avb-toggle" for="chg-glide"><span>积极温控 <small class="chg-note">大于 9A 时按 2 倍曲线降额</small></span><input id="chg-glide" type="checkbox" role="switch"></label>
-            <label class="avb-toggle" for="chg-night"><span>夜间自动切换舒适模式</span><input id="chg-night" type="checkbox" role="switch"></label>
+            <label class="avb-toggle" for="chg-mod" id="chg-mod-row" hidden><span>魔改电池 (6100mAh)<small class="chg-note">容量固定 6100mAh, 仅已更换魔改电芯时开启</small></span><input id="chg-mod" type="checkbox" role="switch"></label>
+            <label class="avb-toggle" for="chg-fullsw"><span>自定义满充电压<small class="chg-note">以 DTBO 基准满充整体偏移, 保持阶梯步进</small></span><input id="chg-fullsw" type="checkbox" role="switch"></label>
+            <div class="chg-param" id="chg-full-box" hidden>
+              <label class="avb-toggle" for="chg-full"><span>满充电压 <b id="chg-full-v">—</b> mV</span><input id="chg-full" type="range" min="4300" max="4570" step="10"></label>
+              <p class="chg-hint">DTBO 基准满充 <b id="chg-full-dts">—</b> mV · 可调范围 4300-4570mV</p>
+            </div>
           </div>
         </section>
 
-        <section class="rm-section">
-          <div class="rm-lock-actions">
-            <button id="chg-save" class="mini-btn wide" type="button" disabled>保存并应用</button>
-          </div>
-          <div class="rm-lock-actions">
-            <button id="chg-log" class="mini-btn ghost" type="button">充电日志</button>
-            <button id="chg-reset" class="mini-btn ghost" type="button">恢复默认</button>
-          </div>
-          <pre id="chg-logview" class="chg-logview" hidden></pre>
+        <section class="rm-section" aria-labelledby="chg-save-heading">
+          <div class="section-heading"><h2 id="chg-save-heading">应用</h2><span>重启后生效</span></div>
+          <p class="rm-hint">充电相关为独立开关, 可与超频档位任意组合; 开启任一功能后保存将重新生成并刷入 DTBO 补丁。</p>
+          <button id="chg-save" class="apply-button" type="button" disabled><span id="chg-save-label">保存并应用</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
         </section>
       </div>
     </div>

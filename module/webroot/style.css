@@ -239,37 +239,22 @@ footer{text-align:center;color:var(--footer);font-size:8px;letter-spacing:1px;ma
 .ap-name{font-size:11.5px;font-weight:550;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ap-pkg{font-size:9px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .app-pkg-sm{font-size:8.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;margin-left:6px}
-/* ---- 充电控制 (chgcv) ---- */
-.chg-live{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
-.chg-live-item{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;min-height:52px;padding:9px 4px;border:1px solid var(--line);border-radius:12px;background:rgba(var(--surface-rgb),var(--card-alpha))}
-.chg-live-item small{font-size:8.5px;color:var(--muted)}
-.chg-live-item b{font-size:14.5px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.15;color:var(--text)}
-.chg-live-item i{font-style:normal;font-size:8px;color:var(--muted)}
-.chg-stage{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:7px;padding:8px 11px;border:1px dashed var(--line);border-radius:12px;background:rgba(var(--surface-rgb),var(--ctl-alpha));font-size:10.5px;color:var(--muted)}
-.chg-stage b{color:var(--accent-strong);font-weight:650}
-.chg-stage span:last-child{font-size:10px;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chg-rows{display:flex;flex-direction:column;gap:6px}
-.chg-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:13px;background:rgba(var(--surface-rgb),var(--card-alpha))}
-.chg-row-head{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
-.chg-row-head span{font-size:11.5px;font-weight:550;color:var(--text)}
-.chg-row-head small{font-size:9px;color:var(--muted);line-height:1.5}
-.chg-row-ctl{display:flex;align-items:center;gap:7px;flex:none}
-.chg-row-ctl input[type=range]{width:108px;accent-color:var(--accent);margin:0}
-.chg-row-ctl input[type=number],.chg-row-ctl input[type=text]{width:64px;height:28px;border:1px solid var(--line);border-radius:9px;background:rgba(var(--surface-rgb),var(--ctl-alpha));color:var(--text);font:inherit;font-size:10.5px;text-align:center;padding:0 2px}
-.chg-row-ctl input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.chg-unit{font-size:9px;color:var(--muted);min-width:18px}
-.chg-note{display:block;font-size:8.5px;color:var(--muted);font-weight:400}
-.chg-logview{margin:8px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:13px;background:rgba(var(--surface-rgb),var(--ctl-alpha));color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:9.5px;line-height:1.6;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+/* ---- 充电相关子页面 ---- */
+.chg-body{display:flex;flex-direction:column;gap:8px}
+.avb-toggle .chg-note{display:block;font-size:9.5px;color:var(--muted);margin-top:2px;line-height:1.5;font-weight:400}
+.chg-param{margin:0 0 0 14px;padding-left:10px;border-left:2px solid var(--accent-line);display:flex;flex-direction:column;gap:5px}
+.chg-hint{font-size:9.5px;color:var(--muted);line-height:1.65;padding:0 2px}
+.chg-hint b{color:var(--accent-strong);font-variant-numeric:tabular-nums}
 /* ---- 悬浮 / 液态玻璃 ---- */
-body.hoverfx :is(.rate-choice,.batt-choice,.mode-choice,.avb-toggle,.verify-state,.machine-row,.qq-input,.mini-btn,.verify-button,.restore-button,.icon-button,.swatch,.rm-entry,.rm-choice,.rm-back,.chg-row,.chg-live-item):not(:disabled):hover{transform:translateY(-2px)}
+body.hoverfx :is(.rate-choice,.batt-choice,.mode-choice,.avb-toggle,.verify-state,.machine-row,.qq-input,.mini-btn,.verify-button,.restore-button,.icon-button,.swatch,.rm-entry,.rm-choice,.rm-back):not(:disabled):hover{transform:translateY(-2px)}
 body.hoverfx .apply-button:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(var(--accent-rgb),.28)}
 body.hoverfx button:not(:disabled):hover{filter:brightness(1.07)}
 body.hoverfx .apply-button:not(:disabled):hover{filter:none}
 body.hoverfx :is(.rate-choice,.batt-choice,.mode-choice,.rm-choice):not(:disabled):hover{box-shadow:0 6px 16px rgba(0,0,0,.28)}
-body.glass :is(.current-card,.rate-choice,.batt-choice,.mode-choice,.avb-toggle,.verify-state,.machine-row,.qq-input,.notice,.error,.placeholder,.theme-panel,.icon-button,.app-row,.app-empty,.ap-panel,.rm-entry,.rm-choice,.rm-rate-row,.rm-empty-card,#rm-notice,.chg-live-item,.chg-row,.chg-logview){backdrop-filter:blur(16px) saturate(1.5);-webkit-backdrop-filter:blur(16px) saturate(1.5);border-color:var(--glass-line);box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
+body.glass :is(.current-card,.rate-choice,.batt-choice,.mode-choice,.avb-toggle,.verify-state,.machine-row,.qq-input,.notice,.error,.placeholder,.theme-panel,.icon-button,.app-row,.app-empty,.ap-panel,.rm-entry,.rm-choice,.rm-rate-row,.rm-empty-card,#rm-notice){backdrop-filter:blur(16px) saturate(1.5);-webkit-backdrop-filter:blur(16px) saturate(1.5);border-color:var(--glass-line);box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
 body.glass .current-card{border-color:rgba(var(--accent-rgb),.2)}
 body.glass .rm-entry{border-color:rgba(var(--accent-rgb),.28)}
 .busy .icon-button svg{animation:spin 1.2s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-@media(max-width:360px){.app{padding-left:12px;padding-right:12px}.rm-sheet{padding-left:12px;padding-right:12px}.rate-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.rm-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.current-rate{font-size:22px}.signal{width:40px;height:20px}.current-bottom{font-size:9.5px}.selection-line{font-size:10.5px}.batt-grid,.mode-grid{grid-template-columns:1fr}.theme-panel{width:calc(100vw - 24px)}.rm-rate-num{min-width:44px}.app-hz{max-width:88px}.chg-live{grid-template-columns:repeat(2,minmax(0,1fr))}.chg-row-ctl input[type=range]{width:84px}.chg-row-ctl input[type=number],.chg-row-ctl input[type=text]{width:56px}}
+@media(max-width:360px){.app{padding-left:12px;padding-right:12px}.rm-sheet{padding-left:12px;padding-right:12px}.rate-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.rm-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.current-rate{font-size:22px}.signal{width:40px;height:20px}.current-bottom{font-size:9.5px}.selection-line{font-size:10.5px}.batt-grid,.mode-grid{grid-template-columns:1fr}.theme-panel{width:calc(100vw - 24px)}.rm-rate-num{min-width:44px}.app-hz{max-width:88px}}

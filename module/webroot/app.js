@@ -9,17 +9,7 @@ let rmBusy = false;
 let apBusy = false;
 let connected = false;
 let dirty = false;
-let sel = { hz: null, battery: null, oc_mode: null, ltpo_off: null };
-
-const BATT_LABELS = {
-  0: ['原版电池', '保持出厂电池与充电策略'],
-  1: ['解除充电限流', '电池参数保持原版'],
-  2: ['解除限流 + 电池解容', '关机 2.8V / 1% 2.85V / 显示真实电量'],
-  3: ['6100mAh 魔改电池', '关机 3.0V / 1% 3.05V / 满充 4.54V'],
-  4: ['魔改电池 + 解除限流', '同 6100mAh 并解除充电限流'],
-  5: ['原版电池 + 电池解容', '关机 2.8V / 1% 2.85V / 显示真实电量'],
-  6: ['GT7P 竞速版解容', '满充 4.55V / 关机 2.85V / 显示真实电量']
-};
+let sel = { hz: null, oc_mode: null, ltpo_off: null };
 
 function notify(message, isError = false) {
   const box = $(isError ? 'error' : 'notice');
@@ -57,9 +47,13 @@ async function command(args, timeoutMs = 60000) {
   }
 }
 
+function battActive(b = state?.batt) {
+  return !!(b && (Number(b.limit) || Number(b.uncap) || Number(b.mod) || Number(b.full_on)));
+}
+
 function licBlocked() {
   const licOk = state?.license?.state === 'ok';
-  const needOC = (sel.hz ?? 0) > 0 || (sel.oc_mode === 'dtbo' && (sel.battery ?? 0) > 0);
+  const needOC = (sel.hz ?? 0) > 0 || (sel.oc_mode === 'dtbo' && battActive());
   return !licOk && needOC;
 }
 
@@ -163,26 +157,6 @@ function drawRates() {
   $('rates-caption').textContent = range ? `${range} · 重启后生效` : '重启后生效';
 }
 
-function drawBatts() {
-  const options = [0, 1, 2, 5];
-  if (state?.batt_capable) options.push(3, 4);
-  if (state?.device === 'gt7p') options.length = 0, options.push(0, 6);
-  const fragment = document.createDocumentFragment();
-  options.forEach(v => {
-    const [title, detail] = BATT_LABELS[v] || [`选项 ${v}`, ''];
-    const checked = sel.battery === v;
-    const button = radioButton('batt-choice', title, checked, () => {
-      sel.battery = v; dirty = true; drawBatts(); controls();
-    });
-    const t = span('b-title', title);
-    if (v === 3 || v === 4) t.classList.add('warn');
-    button.append(t, span('b-detail', detail));
-    fragment.append(button);
-  });
-  $('batts').replaceChildren(fragment);
-  $('batt-caption').textContent = `${options.length} 个方案`;
-}
-
 function drawModes() {
   const fragment = document.createDocumentFragment();
   const koAvail = !!state?.ko?.available;
@@ -197,8 +171,7 @@ function drawModes() {
     const koWarn = state?.ko?.vermatch === 0;
     const ko = radioButton('mode-choice ko', 'KO 内核挂载', sel.oc_mode === 'ko', () => {
       sel.oc_mode = 'ko'; dirty = true;
-      if (sel.battery !== 0) sel.battery = 0;
-      drawModes(); drawBatts(); controls();
+      drawModes(); controls();
     });
     ko.append(span('m-title', 'KO 内核挂载'), span('m-detail', koWarn
       ? 'KO 与当前内核版本不匹配, OTA 后需等待模块更新'
@@ -216,7 +189,7 @@ function drawModes() {
 function render(data) {
   state = data;
   connected = true;
-  sel = { hz: data.hz, battery: data.battery, oc_mode: data.oc_mode, ltpo_off: data.ltpo_off };
+  sel = { hz: data.hz, oc_mode: data.oc_mode, ltpo_off: data.ltpo_off };
   dirty = false;
   const plans = Array.isArray(data.plans) ? data.plans : [];
   const gears = Array.isArray(data.choices) ? data.choices : [];
@@ -252,8 +225,9 @@ function render(data) {
   if (data.version) $('ver').textContent = data.version;
   drawLicense();
   drawRates();
-  drawBatts();
   drawModes();
+  if (!chgDirty) chgLoad(data.batt);
+  else chgDraw();
   controls();
 }
 
@@ -287,8 +261,7 @@ async function apply() {
   controls();
   notify('正在保存配置并应用… (DTBO 方案包含解包/打包/刷入, 请稍候)');
   try {
-    if (sel.oc_mode === 'ko' && sel.battery !== 0) sel.battery = 0;
-    await command(`save hz=${sel.hz} battery=${sel.battery} oc_mode=${sel.oc_mode} ltpo_off=${sel.ltpo_off ? 1 : 0}`);
+    await command(`save hz=${sel.hz} oc_mode=${sel.oc_mode} ltpo_off=${sel.ltpo_off ? 1 : 0}`);
     const result = await command('apply', 120000);
     notify(result.message || '已应用, 重启后生效。');
     render(await command('status'));
@@ -351,7 +324,7 @@ async function verify(auto = false) {
   }
 }
 
-['rates', 'batts', 'modes'].forEach(id => $(id).addEventListener('keydown', event => {
+['rates', 'modes'].forEach(id => $(id).addEventListener('keydown', event => {
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
   const options = [...$(id).querySelectorAll('button:not(:disabled)')];
   const i = options.indexOf(event.target);
@@ -710,266 +683,141 @@ $('app-picker').addEventListener('click', event => {
   if (event.target === $('app-picker')) $('app-picker').hidden = true;
 });
 
-// ================= 充电控制 (模拟恒压, 无联网验证) =================
-let chg = null;
+// ================= 充电相关子页面 (独立开关 · 全自定义参数) =================
+let chg = null;       // 编辑状态 {limit,uncap,voff,mod,full_on,full,voffDts,fullDts,capable}
 let chgBusy = false;
 let chgDirty = false;
-let chgTimer = 0;
-let chgSlidersBuilt = false;
-const chgCtl = {};
-
-const CHG_SLIDERS = [
-  { k: 'cv_vol_mv', label: '恒压电压', hint: '进入恒压阶段的目标电压', min: 4400, max: 4620, step: 5, unit: 'mV' },
-  { k: 'cv_max_ma', label: '恒压阶段电流', hint: '恒压阶段允许的最大充电电流', min: 200, max: 13700, step: 100, unit: 'mA' },
-  { k: 'batt_full_thr_mv', label: '充满电压', hint: '区分纯碳 (4470) 与硅碳 (4570), 不了解勿改', min: 4400, max: 4570, step: 10, unit: 'mV' },
-  { k: 'fast_max', label: 'UFCS/SVOOC 最大电流', hint: '单电芯最高 10900mA, 双电芯最高 13700mA', min: 1000, max: 13700, step: 100, unit: 'mA' },
-  { k: 'pps_max', label: 'PPS 最大电流', min: 1000, max: 8500, step: 100, unit: 'mA' },
-  { k: 'tc_vol_thr_mv', label: '涓流切换电压', min: 4300, max: 4560, step: 5, unit: 'mV' },
-  { k: 'tc_thr_soc', label: '涓流切换电量', min: 50, max: 100, step: 1, unit: '%' },
-  { k: 'tc_vol_full_mv', label: '涓流充满电压', min: 4300, max: 4560, step: 5, unit: 'mV' },
-  { k: 'tc_full_ma', label: '涓流电流', min: 100, max: 2000, step: 50, unit: 'mA' },
-  { k: 'max_ufcs_chg_reset_cc', label: '充电器重置次数', hint: '异常时重协商充电器 (0=关闭, 150W 头 ≤2)', min: 0, max: 10, step: 1, unit: '次' },
-  { k: 'ufcs_reset_delay', label: '重置最短间隔', hint: '低于此间隔不进行复位', min: 0, max: 300, step: 10, unit: '秒' },
-  { k: 'comfort_temp_decic', label: '舒适温控上限', min: 350, max: 450, step: 1, unit: '°C', decic: true },
-  { k: 'batt_temp_high_decic', label: '极限温度上限', hint: '最高 55.0°C, 请注意散热', min: 350, max: 550, step: 1, unit: '°C', decic: true },
-  { k: 'night_start_min', label: '夜间开始时间', min: 0, max: 1439, step: 15, unit: '', time: true },
-  { k: 'night_end_min', label: '夜间结束时间', min: 0, max: 1439, step: 15, unit: '', time: true },
-];
-const CHG_SWITCHES = [
-  ['chg-enabled', 'enabled'], ['chg-ufcs', 'ufcs'], ['chg-pps', 'pps'], ['chg-svooc', 'svooc'],
-  ['chg-plc', 'ignore_plc'], ['chg-faket', 'faket'], ['chg-glide', 'thermal_glide_cap'], ['chg-night', 'night_comfort'],
-];
-const CHG_KEYS = ['enabled', 'ufcs', 'pps', 'svooc', 'faket', 'ignore_plc', 'curr_convergence',
-  'fast_max', 'pps_max', 'cable_override', 'max_ufcs_chg_reset_cc', 'ufcs_reset_delay',
-  'cv_vol_mv', 'cv_max_ma', 'batt_full_thr_mv', 'tc_vol_thr_mv', 'tc_thr_soc', 'tc_full_ma', 'tc_vol_full_mv',
-  'thermal_mode', 'comfort_temp_decic', 'batt_temp_high_decic', 'thermal_glide_cap',
-  'night_comfort', 'night_start_min', 'night_end_min'];
 
 function chgNotify(message, isError = false) {
   const box = $('chg-notice');
-  box.classList.toggle('err', !!isError);
-  box.textContent = message;
+  box.classList.toggle('error', !!isError);
+  box.classList.toggle('notice', !isError);
+  box.textContent = message || '';
   box.hidden = !message;
 }
 
-function chgBuildSliders() {
-  if (chgSlidersBuilt) return;
-  const wrap = $('chg-params');
-  const frag = document.createDocumentFragment();
-  CHG_SLIDERS.forEach(s => {
-    const row = document.createElement('div');
-    row.className = 'chg-row';
-    const head = document.createElement('div');
-    head.className = 'chg-row-head';
-    head.append(span('', s.label));
-    if (s.hint) {
-      const h = document.createElement('small');
-      h.textContent = s.hint;
-      head.append(h);
-    }
-    const toDisp = s.decic ? v => (v / 10).toFixed(1)
-      : s.time ? v => `${String(Math.floor(v / 60)).padStart(2, '0')}:${String(v % 60).padStart(2, '0')}`
-        : v => String(v);
-    const toRaw = s.decic ? d => Math.round(parseFloat(d) * 10)
-      : s.time ? d => {
-        const m = /^(\d{1,2}):(\d{1,2})$/.exec(String(d).trim());
-        return m ? Math.min(1439, (+m[1]) * 60 + (+m[2])) : NaN;
-      }
-        : d => parseInt(d, 10);
-    const range = document.createElement('input');
-    range.type = 'range';
-    const field = document.createElement('input');
-    if (s.time) {
-      range.min = s.min; range.max = s.max; range.step = s.step;
-      field.type = 'text'; field.inputMode = 'numeric'; field.placeholder = 'HH:MM';
-    } else if (s.decic) {
-      range.min = s.min / 10; range.max = s.max / 10; range.step = 0.1;
-      field.type = 'number'; field.min = s.min / 10; field.max = s.max / 10; field.step = 0.1; field.inputMode = 'decimal';
-    } else {
-      range.min = s.min; range.max = s.max; range.step = s.step;
-      field.type = 'number'; field.min = s.min; field.max = s.max; field.step = s.step; field.inputMode = 'numeric';
-    }
-    range.setAttribute('aria-label', s.label);
-    field.setAttribute('aria-label', s.label);
-    const apply = raw => {
-      if (!Number.isFinite(raw)) return;
-      raw = Math.max(s.min, Math.min(s.max, Math.round(raw)));
-      chgSet(s.k, raw);
-      range.value = s.decic ? (raw / 10) : String(raw);
-      field.value = toDisp(raw);
-    };
-    range.addEventListener('input', () => apply(toRaw(range.value)));
-    field.addEventListener('change', () => apply(toRaw(field.value)));
-    const ctl = document.createElement('div');
-    ctl.className = 'chg-row-ctl';
-    ctl.append(range, field);
-    if (s.unit) ctl.append(span('chg-unit', s.unit));
-    row.append(head, ctl);
-    frag.append(row);
-    chgCtl[s.k] = { range, field, toDisp };
-  });
-  wrap.replaceChildren(frag);
-  chgSlidersBuilt = true;
-}
-
-function chgSet(k, v) {
-  if (!chg) return;
-  chg[k] = v;
-  chgDirty = true;
-  $('chg-save').disabled = false;
+function chgLoad(b) {
+  const nb = b || {};
+  const fullDts = Number(nb.full_dts) || 0;
+  const clamp = (v, lo, hi, dft) => (Number.isFinite(v) && v >= lo && v <= hi ? v : dft);
+  chg = {
+    limit: Number(nb.limit) ? 1 : 0,
+    uncap: Number(nb.uncap) ? 1 : 0,
+    voff: clamp(Number(nb.voff), 2700, 3350, 3000),
+    mod: Number(nb.mod) ? 1 : 0,
+    full_on: Number(nb.full_on) ? 1 : 0,
+    full: clamp(Number(nb.full), 4300, 4570, 0),
+    voffDts: Number(nb.voff_dts) || 0,
+    fullDts,
+    capable: !!state?.batt_capable,
+  };
+  if (!chg.full) chg.full = fullDts >= 4300 && fullDts <= 4570 ? fullDts : 4400;
+  chgDirty = false;
+  chgDraw();
 }
 
 function chgDraw() {
-  chgBuildSliders();
-  const c = chg || {};
-  const supported = c.support !== 0;
-  document.querySelectorAll('#chg-page .rm-section').forEach(sec => {
-    if (sec.id === 'chg-unsupported' || sec.id === 'chg-live-section') return;
-    sec.hidden = !supported;
-  });
-  CHG_SWITCHES.forEach(([id, k]) => { $(id).checked = c[k] === 1; });
-  document.querySelectorAll('.chg-mode-seg .rc-seg').forEach(b =>
-    b.classList.toggle('on', b.dataset.mode === (c.thermal_mode || 'comfort')));
-  if (!chgDirty) {
-    CHG_SLIDERS.forEach(s => {
-      const ctl = chgCtl[s.k];
-      const v = c[s.k];
-      if (!ctl || v === undefined || v === null) return;
-      ctl.range.value = s.decic ? (v / 10) : String(v);
-      ctl.field.value = ctl.toDisp(v);
-    });
-  }
+  if (!chg) return;
+  const koMode = state?.oc_mode === 'ko';
+  const dis = chgBusy || !connected;
+  const lic = state?.license?.state === 'ok';
+  const anyOn = chg.limit || chg.uncap || chg.mod || chg.full_on;
+  ['chg-limit', 'chg-uncap', 'chg-mod', 'chg-fullsw', 'chg-voff', 'chg-full', 'chg-off'].forEach(id => { $(id).disabled = dis; });
+  $('chg-limit').checked = !!chg.limit;
+  $('chg-uncap').checked = !!chg.uncap;
+  $('chg-mod').checked = !!chg.mod;
+  $('chg-fullsw').checked = !!chg.full_on;
+  $('chg-mod-row').hidden = !chg.capable;
+  $('chg-voff-box').hidden = !chg.uncap;
+  $('chg-full-box').hidden = !chg.full_on;
+  $('chg-voff').value = String(chg.voff);
+  $('chg-voff-v').textContent = String(chg.voff);
+  $('chg-voff-p1').textContent = String(chg.voff + 50);
+  $('chg-full').value = String(chg.full);
+  $('chg-full-v').textContent = String(chg.full);
+  $('chg-full-dts').textContent = chg.fullDts ? String(chg.fullDts) : '未识别';
+  const on = [];
+  if (chg.limit) on.push('解除限流');
+  if (chg.uncap) on.push(`解容 ${chg.voff}mV`);
+  if (chg.mod) on.push('魔改 6100mAh');
+  if (chg.full_on) on.push(`满充 ${chg.full}mV`);
+  const capText = on.length ? on.join(' · ') : '全部关闭';
+  $('chg-sw-caption').textContent = chgDirty ? `${capText} · 待保存` : capText;
+  $('chg-entry-cap').textContent = koMode ? 'KO 挂载方式下不可用' : capText;
+  $('chg-sub').textContent = koMode
+    ? '当前为 KO 挂载方式, 充电相关功能不可用'
+    : `基准关机 ${chg.voffDts ? `${chg.voffDts}mV` : '未识别'} · 基准满充 ${chg.fullDts ? `${chg.fullDts}mV` : '未识别'}`;
+  $('chg-save').disabled = dis || koMode;
+  $('chg-save-label').textContent = chgBusy ? '正在处理…' : (!lic && anyOn ? '需先完成QQ群验证' : '保存并应用');
 }
 
-const CHG_STAGES = { off: '已关闭 (官方曲线)', idle: '未充电', boot: '协商跟随中', chg: '快充', cv: '恒压', tail: '涓流' };
-
-function chgDrawLive() {
-  const c = chg || {};
-  $('chg-vbat').textContent = c.vbat != null ? c.vbat : '—';
-  $('chg-ichg').textContent = c.ichg != null ? c.ichg : '—';
-  $('chg-temp').textContent = c.temp != null ? (c.temp / 10).toFixed(1) : '—';
-  $('chg-soc').textContent = c.soc != null ? c.soc : '—';
-  let st = CHG_STAGES[c.stage] || c.stage || '—';
-  if (typeof c.stage === 'string' && c.stage.includes('/')) {
-    st = `${CHG_STAGES[c.stage.split('/')[0]] || c.stage} · 温控降额`;
-  }
-  $('chg-stage').textContent = st;
-  $('chg-target').textContent = c.fv && c.fcc ? `FV ${c.fv}mV · FCC ${c.fcc}mA` : '—';
-  const running = c.daemon === 1;
-  $('chg-live-cap').textContent = running ? '服务运行中' : '服务已停止';
-  $('chg-sub').textContent = `${running ? '服务运行中' : '服务已停止'} · 恒压${c.enabled === 1 ? '开启' : '关闭'}${c.status ? ` · ${c.status}` : ''}`;
-  $('chg-stop').textContent = running ? '停止服务' : '启动服务';
-  $('chg-entry-cap').textContent = c.support === 0 ? '本机不支持 (无 votable 接口)'
-    : `${running ? '运行中' : '已停止'} · 恒压${c.enabled === 1 ? '开启' : '关闭'}`;
-}
-
-async function chgAction(args, okMsg, timeoutMs = 30000) {
-  if (chgBusy) return;
-  chgBusy = true;
-  try {
-    const result = await command(`chg ${args}`, timeoutMs);
-    if (result.chg) {
-      chg = result.chg;
-      if (!chgDirty) chgDraw();
-      chgDrawLive();
-    }
-    if (okMsg || result.message) chgNotify(okMsg || result.message);
-  } catch (error) {
-    chgNotify(error.message, true);
-  } finally {
-    chgBusy = false;
-  }
-}
-
-async function chgPoll() {
-  if (chgBusy || $('chg-page').hidden) return;
-  try {
-    const result = await command('chg status', 15000);
-    if (!result.chg) return;
-    if (!chgDirty) {
-      chg = result.chg;
-      chgDraw();
-    } else {
-      const live = {};
-      ['daemon', 'support', 'stage', 'status', 'error', 'vbat', 'ichg', 'temp', 'soc', 'ts', 'fv', 'fcc', 'state_ts']
-        .forEach(k => { if (result.chg[k] !== undefined) live[k] = result.chg[k]; });
-      chg = { ...chg, ...live };
-    }
-    chgDrawLive();
-  } catch { /* 静默轮询 */ }
+function chgMark() {
+  chgDirty = true;
+  chgDraw();
 }
 
 async function chgSave() {
-  if (!chgDirty || !chg || chgBusy) return;
+  if (chgBusy || !chg || !state) return;
+  if (state.oc_mode === 'ko') {
+    chgNotify('当前为 KO 挂载方式, 不修改 DTBO, 充电相关功能不可用。', true);
+    return;
+  }
+  const anyOn = chg.limit || chg.uncap || chg.mod || chg.full_on;
+  if (anyOn && state.license?.state !== 'ok') {
+    chgNotify('请先在主页完成QQ群验证, 再开启充电相关功能。', true);
+    return;
+  }
   chgBusy = true;
-  $('chg-save').disabled = true;
-  const args = CHG_KEYS.filter(k => chg[k] !== undefined && chg[k] !== null).map(k => `${k}=${chg[k]}`).join(' ');
+  chgDraw();
+  chgNotify('正在保存充电相关配置并应用… (包含解包/打包/刷入, 请稍候)');
   try {
-    const result = await command(`chg save ${args}`, 30000);
+    await command(`save batt_limit=${chg.limit} batt_uncap=${chg.uncap} batt_voff=${chg.voff} batt_mod=${chg.mod} batt_full_on=${chg.full_on} batt_full=${chg.full_on ? chg.full : 0}`);
+    const result = await command('apply', 120000);
     chgDirty = false;
-    if (result.chg) { chg = result.chg; chgDraw(); chgDrawLive(); }
-    chgNotify(result.message || '配置已保存并应用。');
+    chgNotify(result.message || '已应用, 重启后生效。');
+    render(await command('status'));
   } catch (error) {
-    chgDirty = true;
-    $('chg-save').disabled = false;
     chgNotify(error.message, true);
+    try { render(await command('status')); } catch { connected = false; }
   } finally {
     chgBusy = false;
+    chgDraw();
   }
 }
 
-CHG_SWITCHES.forEach(([id, k]) => {
-  $(id).addEventListener('change', () => chgSet(k, $(id).checked ? 1 : 0));
+$('chg-limit').addEventListener('change', () => { chg.limit = $('chg-limit').checked ? 1 : 0; chgMark(); });
+$('chg-uncap').addEventListener('change', () => { chg.uncap = $('chg-uncap').checked ? 1 : 0; chgMark(); });
+$('chg-mod').addEventListener('change', () => { chg.mod = $('chg-mod').checked ? 1 : 0; chgMark(); });
+$('chg-fullsw').addEventListener('change', () => { chg.full_on = $('chg-fullsw').checked ? 1 : 0; chgMark(); });
+$('chg-voff').addEventListener('input', () => {
+  chg.voff = Number($('chg-voff').value) || 3000;
+  $('chg-voff-v').textContent = String(chg.voff);
+  $('chg-voff-p1').textContent = String(chg.voff + 50);
 });
-document.querySelector('.chg-mode-seg').addEventListener('click', event => {
-  const b = event.target.closest('button[data-mode]');
-  if (!b) return;
-  chgSet('thermal_mode', b.dataset.mode);
-  document.querySelectorAll('.chg-mode-seg .rc-seg').forEach(x => x.classList.toggle('on', x === b));
+$('chg-voff').addEventListener('change', chgMark);
+$('chg-full').addEventListener('input', () => {
+  chg.full = Number($('chg-full').value) || 4400;
+  $('chg-full-v').textContent = String(chg.full);
 });
-$('chg-save').addEventListener('click', chgSave);
-$('chg-stop').addEventListener('click', () => {
-  if (chg?.daemon === 1) chgAction('stop', '恒压服务已停止, 已交还官方充电策略。');
-  else chgAction('start', '恒压服务已启动。');
-});
-let chgResetArmed = 0;
-$('chg-reset').addEventListener('click', () => {
-  const now = Date.now();
-  if (now - chgResetArmed > 3000) {
-    chgResetArmed = now;
-    $('chg-reset').textContent = '再次点击确认';
-    setTimeout(() => { chgResetArmed = 0; $('chg-reset').textContent = '恢复默认'; }, 3000);
-    return;
-  }
-  chgResetArmed = 0;
-  $('chg-reset').textContent = '恢复默认';
-  chgDirty = false;
-  $('chg-save').disabled = true;
-  chgAction('reset', '已恢复默认配置。');
-});
-$('chg-log').addEventListener('click', async () => {
-  try {
-    const result = await command('chg log', 15000);
-    const view = $('chg-logview');
-    view.textContent = result.log || '(暂无日志)';
-    view.hidden = false;
-  } catch (error) {
-    chgNotify(error.message, true);
-  }
+$('chg-full').addEventListener('change', chgMark);
+$('chg-off').addEventListener('click', () => {
+  if (!chg) return;
+  chg.limit = 0; chg.uncap = 0; chg.mod = 0; chg.full_on = 0;
+  chgMark();
+  chgNotify('已全部关闭 (尚未保存, 请点击「保存并应用」)。');
 });
 $('chg-entry').addEventListener('click', () => {
   $('chg-page').hidden = false;
   document.body.classList.add('rm-open');
   chgNotify('');
-  chgAction('status', '');
-  if (!chgTimer) chgTimer = setInterval(chgPoll, 3000);
+  chgDraw();
 });
 $('chg-back').addEventListener('click', () => {
   $('chg-page').hidden = true;
   document.body.classList.remove('rm-open');
-  if (chgTimer) { clearInterval(chgTimer); chgTimer = 0; }
   refresh(false);
 });
+$('chg-save').addEventListener('click', chgSave);
 
 // ================= 主题 =================
 const THEME_KEY = 'dtbo_theme';
@@ -1137,6 +985,6 @@ $('copy-machine').addEventListener('click', async () => {
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && $('rm-page').hidden) refresh(false);
+  if (!document.hidden && $('rm-page').hidden && $('chg-page').hidden) refresh(false);
 });
 refresh(false);

@@ -12,7 +12,22 @@ log() { echo "$@" >> "$LOG"; echo "[dtbo_oc] $@"; }
 
 mkdir -p "$DATA_DIR" "$WORK" "$WORK/ko"
 : > "$LOG"
-chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" "$MODDIR/bin/chgcv_daemon.sh" 2>/dev/null
+chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
+
+# v2.50: 充电控制功能已移除 — 停止 v2.49 遗留的 chgcv 守护并解除 votable 强制
+if [ -f "$DATA_DIR/chgcv.pid" ]; then
+    kill "$(cat "$DATA_DIR/chgcv.pid" 2>/dev/null)" 2>/dev/null
+    rm -f "$DATA_DIR/chgcv.pid"
+fi
+pkill -f chgcv_daemon.sh 2>/dev/null
+if [ -d /proc/oplus-votable ]; then
+    for VT in FV_MAX WIRED_FCC FV_MIN UFCS_NOT_ALLOW PPS_NOT_ALLOW VOOC_DISABLE VOOC_NOT_ALLOW PLC_FORCE_BUCK; do
+        [ -d "/proc/oplus-votable/$VT" ] || continue
+        echo 0 > "/proc/oplus-votable/$VT/force_val" 2>/dev/null
+        echo 0 > "/proc/oplus-votable/$VT/force_active" 2>/dev/null
+    done
+fi
+rm -f "$DATA_DIR/chgcv.conf" "$DATA_DIR/chgcv.state" "$DATA_DIR/chgcv.log" 2>/dev/null
 
 # 星驰式刷新率守护: 等 boot 完成后按 rc_config.json / apps.conf 启动 (幂等)
 # 启动条件: 全局档位锁定已设置(globalRateId!=0) 或 按应用切换开启且有规则
@@ -38,24 +53,15 @@ chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" "$MODDIR/bin/chgcv_daem
     nohup sh "$MODDIR/bin/ratectl_daemon.sh" >/dev/null 2>&1 &
 ) &
 
-# 充电恒压守护 (chgcv): 等 boot 完成后启动 (幂等; 内核无 votable 接口时自动退出)
-(
-    i=0
-    while [ "$i" -lt 45 ]; do
-        [ "$(getprop sys.boot_completed)" = "1" ] && break
-        sleep 2
-        i=$((i+1))
-    done
-    [ -f "$DATA_DIR/chgcv.conf" ] || exit 0
-    [ -d /proc/oplus-votable ] || exit 0
-    [ -f "$DATA_DIR/chgcv.pid" ] && kill -0 "$(cat "$DATA_DIR/chgcv.pid" 2>/dev/null)" 2>/dev/null && exit 0
-    nohup sh "$MODDIR/bin/chgcv_daemon.sh" >/dev/null 2>&1 &
-) &
-
 if [ ! -f "$CONFIG" ]; then
     cat > "$CONFIG" <<'EOF'
 HZ_CHOICE=144
-BATTERY=0
+BATT_LIMIT=0
+BATT_UNCAP=0
+BATT_VOFF=3000
+BATT_MOD=0
+BATT_FULL_ON=0
+BATT_FULL=0
 OC_MODE=dtbo
 LTPO_OFF=0
 FLASH=1
@@ -65,6 +71,23 @@ EOF
     log "已生成默认配置 $CONFIG"
 fi
 . "$CONFIG"
+# v2.50 配置迁移: 旧版 BATTERY 固定方案 -> 充电相关自定义参数 (一次性)
+if grep -q '^BATTERY=' "$CONFIG" 2>/dev/null; then
+    _OB=$(sed -n 's/^BATTERY=//p' "$CONFIG" | head -n 1)
+    case "$_OB" in
+        1) BATT_LIMIT=1 ;;
+        2) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2800 ;;
+        3) BATT_MOD=1 ;;
+        4) BATT_MOD=1; BATT_LIMIT=1 ;;
+        5) BATT_UNCAP=1; BATT_VOFF=2800 ;;
+        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2850; BATT_FULL_ON=1; BATT_FULL=4550 ;;
+    esac
+    sed -i '/^BATTERY=/d' "$CONFIG"
+    { echo "BATT_LIMIT=${BATT_LIMIT:-0}"; echo "BATT_UNCAP=${BATT_UNCAP:-0}"
+      echo "BATT_VOFF=${BATT_VOFF:-3000}"; echo "BATT_MOD=${BATT_MOD:-0}"
+      echo "BATT_FULL_ON=${BATT_FULL_ON:-0}"; echo "BATT_FULL=${BATT_FULL:-0}"; } >> "$CONFIG"
+    log "已迁移旧版电池方案 BATTERY=$_OB 到充电相关自定义参数"
+fi
 sed -i '/^AVB_OFF=/d' "$CONFIG" 2>/dev/null
 [ -z "${OC_MODE:-}" ] && OC_MODE=dtbo
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
@@ -245,36 +268,42 @@ else
     fi
 fi
 
-[ -z "$BATTERY" ] && BATTERY=0
-case "$BATTERY" in 0|1|2|3|4|5|6) ;; *) BATTERY=0 ;; esac
-if [ "$OC_MODE" = "ko" ] && [ "$BATTERY" != "0" ]; then
-    log "[提示] KO 方案不修改 DTBO, 电池选项已忽略 (BATTERY=$BATTERY -> 0)"
-    BATTERY=0
+# 充电相关参数规范化 (v2.50 全自定义模型)
+[ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
+[ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
+[ -z "$BATT_MOD" ] && BATT_MOD=0
+[ -z "$BATT_FULL_ON" ] && BATT_FULL_ON=0
+[ -z "$BATT_VOFF" ] && BATT_VOFF=3000
+[ -z "$BATT_FULL" ] && BATT_FULL=0
+case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
+case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
+case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
+case "$BATT_FULL_ON" in 0|1) ;; *) BATT_FULL_ON=0 ;; esac
+case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=3000 ;; esac
+[ "$BATT_VOFF" -lt 2700 ] && BATT_VOFF=2700
+[ "$BATT_VOFF" -gt 3350 ] && BATT_VOFF=3350
+case "$BATT_FULL" in ''|*[!0-9]*) BATT_FULL=0 ;; esac
+[ "$BATT_FULL" -gt 0 ] && [ "$BATT_FULL" -lt 4300 ] && BATT_FULL=4300
+[ "$BATT_FULL" -gt 4570 ] && BATT_FULL=4570
+if [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ]; then
+    log "[提示] 魔改电池仅 ACE2Pro/一加11/一加12 支持, 已重置为关闭"
+    BATT_MOD=0
 fi
-if [ "$BATT_OK" != "1" ]; then
-    case "$BATTERY" in
-        3|4)
-            log "[提示] 电池选项 $BATTERY 仅 ACE2Pro/一加11/一加12 支持, 已重置为原版"
-            BATTERY=0
-            ;;
-    esac
+if [ "$BATT_FULL_ON" = "1" ] && [ "$BATT_FULL" = "0" ]; then
+    log "[提示] 满充电压开关开启但未设置数值, 已重置为关闭"
+    BATT_FULL_ON=0
 fi
-if [ "$DEVICE" = "gt7p" ]; then
-    case "$BATTERY" in
-        1|2|3|4|5)
-            log "[提示] gt7p 请使用电池选项 6 (GT7P 专属解容), 其他电池选项已重置为原版"
-            BATTERY=0
-            ;;
-    esac
-elif [ "$BATTERY" = "6" ]; then
-    log "[提示] 电池选项 6 仅 GT7 Pro 竞速版支持, 已重置为原版"
-    BATTERY=0
+BATT_ACTIVE=0
+[ "$BATT_LIMIT" = "1" ] || [ "$BATT_UNCAP" = "1" ] || [ "$BATT_MOD" = "1" ] || [ "$BATT_FULL_ON" = "1" ] && BATT_ACTIVE=1
+if [ "$OC_MODE" = "ko" ] && [ "$BATT_ACTIVE" = "1" ]; then
+    log "[提示] KO 方案不修改 DTBO, 充电相关功能不可用 (已全部重置为关闭)"
+    BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_FULL_ON=0; BATT_ACTIVE=0
 fi
-log "方案: 档位 ${HZ_CHOICE:-0}, 电池模式 $BATTERY, 超频方案 $OC_MODE, LTPO禁用 ${LTPO_OFF:-0}"
+log "方案: 档位 ${HZ_CHOICE:-0}, 超频方案 $OC_MODE, LTPO禁用 ${LTPO_OFF:-0}, 充电相关: 限流=$BATT_LIMIT 解容=$BATT_UNCAP(${BATT_VOFF}mV) 魔改=$BATT_MOD 满充=$BATT_FULL_ON($([ "$BATT_FULL" = "0" ] && echo "DTBO默认" || echo "${BATT_FULL}mV"))"
 
 NEED_OC=0
 [ "${HZ_CHOICE:-0}" != "0" ] && NEED_OC=1
-[ "${BATTERY:-0}" != "0" ] && NEED_OC=1
+[ "$BATT_ACTIVE" = "1" ] && NEED_OC=1
 if [ "$NEED_OC" = "1" ]; then
     LICOUT=$("$TOOL" license 2>/dev/null)
     case "$LICOUT" in
@@ -337,8 +366,8 @@ fi
 
 if [ "$HZ_CHOICE" = "0" ]; then
     HZ=""
-    log "本机型不超频, 仅应用电池/充电方案 (BATTERY=$BATTERY)"
-    [ "$BATTERY" = "0" ] && { log "电池方案也为原版, 无需任何修改"; exit 0; }
+    log "本机型不超频, 仅应用充电相关方案"
+    [ "$BATT_ACTIVE" = "0" ] && { log "充电相关功能全部关闭, 无需任何修改"; exit 0; }
 else
     # 选择任一超频档位即生成机型完整档位列表 (档位切换功能需要全部档位)
     if [ "$DEVICE" = "gt7p" ]; then
@@ -347,14 +376,19 @@ else
         HZ=$(echo "$CHOICES" | tr ' ' ',')
     fi
     [ -z "$HZ" ] && { log "[错误] 档位展开失败"; exit 1; }
-    log "生成档位列表 (完整): $HZ (电池模式 $BATTERY, 原厂已有档位自动跳过)"
+    log "生成档位列表 (完整): $HZ (原厂已有档位自动跳过)"
 fi
 
 ko_unload
 
 NEW="$WORK/patched.img"
 rm -rf "$WORK"/e*_* 2>/dev/null
-PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --battery $BATTERY --workdir $WORK"
+PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --workdir $WORK"
+# 充电相关 (v2.50 全自定义参数): 各项独立开关, 与超频档位可任意组合
+[ "$BATT_LIMIT" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-limit"
+[ "$BATT_UNCAP" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-uncap --batt-voff $BATT_VOFF"
+[ "$BATT_MOD" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-mod"
+[ "$BATT_FULL_ON" = "1" ] && [ "$BATT_FULL" != "0" ] && PATCH_ARGS="$PATCH_ARGS --batt-full $BATT_FULL"
 [ -n "$HZ" ] && PATCH_ARGS="$PATCH_ARGS --hz $HZ"
 [ "$DEVICE" = "gt7p" ] && PATCH_ARGS="$PATCH_ARGS --gt7p"
 [ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2 --min-clone"

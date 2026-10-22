@@ -17,7 +17,7 @@ if [ "$ARCH64" != "arm64-v8a" ]; then
 fi
 
 ui_print "*******************************"
-ui_print " 超频解容模块 (多机型) v2.3.7"
+ui_print " 超频解容模块 (多机型) v2.50"
 ui_print "*******************************"
 ui_print "- 安全架构: 安装零分区写入, 不碰校验分区"
 ui_print "- 安装二进制: dtbo_oc + dtc (静态 arm64)"
@@ -114,8 +114,12 @@ if [ -f "$STOCK" ]; then
     BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
     OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
     STRIP=$(echo "$IDINFO" | grep '^STRIP_ABOVE=' | cut -d= -f2)
+    BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
+    BATT_FULL_DTS=$(echo "$IDINFO" | grep '^BATT_FULL_DTS=' | cut -d= -f2)
 fi
 [ -z "$STRIP" ] && STRIP=0
+[ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
+[ -z "$BATT_FULL_DTS" ] && BATT_FULL_DTS=0
 
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
@@ -245,7 +249,9 @@ ui_choose() {
     ui_print "  已选择: $SEL_TEXT"
 }
 
-HZ_CHOICE=""; BATTERY=""; OC_MODE=""; LTPO_OFF=""
+HZ_CHOICE=""; OC_MODE=""; LTPO_OFF=""
+BATT_LIMIT=""; BATT_UNCAP=""; BATT_MOD=""; BATT_FULL_ON=""; BATT_VOFF=""; BATT_FULL=""
+BATTERY=""
 PRESET=0
 if [ -f /sdcard/dtbo_oc.conf ]; then
     . /sdcard/dtbo_oc.conf
@@ -254,9 +260,28 @@ if [ -f /sdcard/dtbo_oc.conf ]; then
 fi
 if [ -f "$CONFIG" ]; then
     [ -z "$HZ_CHOICE" ] && HZ_CHOICE=$(grep '^HZ_CHOICE=' "$CONFIG" 2>/dev/null | cut -d= -f2)
-    [ -z "$BATTERY" ] && BATTERY=$(grep '^BATTERY=' "$CONFIG" 2>/dev/null | cut -d= -f2)
     [ -z "$OC_MODE" ] && OC_MODE=$(grep '^OC_MODE=' "$CONFIG" 2>/dev/null | cut -d= -f2)
     [ -z "$LTPO_OFF" ] && LTPO_OFF=$(grep '^LTPO_OFF=' "$CONFIG" 2>/dev/null | cut -d= -f2)
+    [ -z "$BATT_LIMIT" ] && BATT_LIMIT=$(grep '^BATT_LIMIT=' "$CONFIG" 2>/dev/null | cut -d= -f2)
+    [ -z "$BATT_UNCAP" ] && BATT_UNCAP=$(grep '^BATT_UNCAP=' "$CONFIG" 2>/dev/null | cut -d= -f2)
+    [ -z "$BATT_MOD" ] && BATT_MOD=$(grep '^BATT_MOD=' "$CONFIG" 2>/dev/null | cut -d= -f2)
+    [ -z "$BATT_FULL_ON" ] && BATT_FULL_ON=$(grep '^BATT_FULL_ON=' "$CONFIG" 2>/dev/null | cut -d= -f2)
+    [ -z "$BATT_VOFF" ] && BATT_VOFF=$(grep '^BATT_VOFF=' "$CONFIG" 2>/dev/null | cut -d= -f2)
+    [ -z "$BATT_FULL" ] && BATT_FULL=$(grep '^BATT_FULL=' "$CONFIG" 2>/dev/null | cut -d= -f2)
+    [ -z "$BATTERY" ] && BATTERY=$(grep '^BATTERY=' "$CONFIG" 2>/dev/null | cut -d= -f2)
+fi
+# v2.50 配置迁移: 旧版 BATTERY 固定方案 -> 充电相关独立开关 (一次性)
+if [ -n "$BATTERY" ]; then
+    case "$BATTERY" in
+        1) BATT_LIMIT=1 ;;
+        2) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2800 ;;
+        3) BATT_MOD=1 ;;
+        4) BATT_MOD=1; BATT_LIMIT=1 ;;
+        5) BATT_UNCAP=1; BATT_VOFF=2800 ;;
+        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2850; BATT_FULL_ON=1; BATT_FULL=4550 ;;
+    esac
+    BATTERY=""
+    ui_print "- 已迁移旧版电池方案到充电相关独立开关"
 fi
 
 if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" ]; }; then
@@ -302,36 +327,69 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
     fi
 
     if [ "$OC_MODE" = "ko" ]; then
-        BATTERY=0
-        ui_print "- KO 方案不修改 DTBO, 电池/充电方案不可用"
-    elif [ "$DEVICE" = "gt7p" ]; then
-        GT_INIT=0
-        [ "${BATTERY:-0}" = "6" ] && GT_INIT=1
-        ui_choose "电池/充电方案:" "保持原版电池|GT7P 竞速版解容 (满充4.55V/关机2.85V/解除限流/显示真实电量)" "$GT_INIT"
-        BATTERY=$([ "$SEL" = "1" ] && echo 6 || echo 0)
+        BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_FULL_ON=0
+        ui_print "- KO 方案不修改 DTBO, 充电相关功能不可用 (已全部关闭)"
     else
-        BAT_MENU="保持原版电池|解除充电限流|解除充电限流 + 电池解容 (关机2.8V/1%2.85V/显示真实电量)|原版电池 + 电池解容 (关机2.8V/1%2.85V/显示真实电量)"
-        BAT_MODES="0 1 2 5"
-        if [ "$BATT_OK" = "1" ]; then
-            BAT_MENU="$BAT_MENU|6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)|6100mAh 魔改电池 + 解除充电限流"
-            BAT_MODES="$BAT_MODES 3 4"
-        fi
-        INIT=0; i=0
-        for m in $BAT_MODES; do
-            [ "$m" = "${BATTERY:-0}" ] && INIT=$i
-            i=$((i+1))
-        done
-        ui_choose "电池/充电方案:" "$BAT_MENU" "$INIT"
-        i=0
-        for m in $BAT_MODES; do
-            [ "$i" = "$SEL" ] && BATTERY=$m
-            i=$((i+1))
-        done
-    fi
+        ui_print " "
+        ui_print "- 充电相关 (独立开关, 可任意组合; DTBO 基准: 关机 $([ "$BATT_VOFF_DTS" != "0" ] && echo "${BATT_VOFF_DTS}mV" || echo "未识别") / 满充 $([ "$BATT_FULL_DTS" != "0" ] && echo "${BATT_FULL_DTS}mV" || echo "未识别"))"
 
-    if [ "$BATT_OK" = "1" ] && { [ "$BATTERY" = "3" ] || [ "$BATTERY" = "4" ]; }; then
-        ui_choose "确认: 设备是否已更换 6100mAh 魔改电池?" "否, 改回原版电池|是, 确认已更换" 0
-        [ "$SEL" = "0" ] && { BATTERY=0; ui_print "- 已改回原版电池"; }
+        L_INIT=0; [ "${BATT_LIMIT:-0}" = "1" ] && L_INIT=1
+        ui_choose "解除充电限流 (删限流节点/策略表电流翻倍):" "关闭|开启" "$L_INIT"
+        BATT_LIMIT=$([ "$SEL" = "1" ] && echo 1 || echo 0)
+
+        U_INIT=0; [ "${BATT_UNCAP:-0}" = "1" ] && U_INIT=1
+        ui_choose "电池解容 (自定义关机电压, 释放底部隐藏电量):" "关闭|开启" "$U_INIT"
+        BATT_UNCAP=$([ "$SEL" = "1" ] && echo 1 || echo 0)
+        if [ "$BATT_UNCAP" = "1" ]; then
+            VOPTS=""; VINIT=6; i=0; v=2700
+            [ -n "${BATT_VOFF:-}" ] || BATT_VOFF=3000
+            while [ "$v" -le 3350 ]; do
+                VOPTS="${VOPTS:+$VOPTS|}${v}mV"
+                [ "$BATT_VOFF" = "$v" ] && VINIT=$i
+                i=$((i+1)); v=$((v+50))
+            done
+            ui_choose "关机电压 (1%电量=关机+50mV, 充电中欠压=关机-100mV):" "$VOPTS" "$VINIT"
+            BATT_VOFF=3000; i=0; v=2700
+            while [ "$v" -le 3350 ]; do
+                [ "$i" = "$SEL" ] && BATT_VOFF=$v
+                i=$((i+1)); v=$((v+50))
+            done
+        fi
+
+        if [ "$BATT_OK" = "1" ]; then
+            M_INIT=0; [ "${BATT_MOD:-0}" = "1" ] && M_INIT=1
+            ui_choose "魔改电池 (容量固定 6100mAh, 仅已更换魔改电芯时开启):" "关闭|开启" "$M_INIT"
+            BATT_MOD=$([ "$SEL" = "1" ] && echo 1 || echo 0)
+            if [ "$BATT_MOD" = "1" ]; then
+                ui_choose "确认: 设备是否已更换 6100mAh 魔改电池?" "否, 改回关闭|是, 确认已更换" 0
+                [ "$SEL" = "0" ] && { BATT_MOD=0; ui_print "- 已改回关闭"; }
+            fi
+        else
+            BATT_MOD=0
+        fi
+
+        F_INIT=0; [ "${BATT_FULL_ON:-0}" = "1" ] && F_INIT=1
+        ui_choose "自定义满充电压 (以 DTBO 基准满充整体偏移):" "关闭 (保持 DTBO 默认)|开启" "$F_INIT"
+        BATT_FULL_ON=$([ "$SEL" = "1" ] && echo 1 || echo 0)
+        if [ "$BATT_FULL_ON" = "1" ]; then
+            FOPTS=""; FINIT=10; i=0; v=4300
+            { [ -n "${BATT_FULL:-}" ] && [ "$BATT_FULL" -ge 4300 ] && [ "$BATT_FULL" -le 4570 ]; } || BATT_FULL=4400
+            while [ "$v" -le 4570 ]; do
+                MARK=""
+                [ "$v" = "$BATT_FULL_DTS" ] && MARK="(原厂)"
+                FOPTS="${FOPTS:+$FOPTS|}${v}mV${MARK}"
+                [ "$BATT_FULL" = "$v" ] && FINIT=$i
+                i=$((i+1)); v=$((v+10))
+            done
+            ui_choose "满充电压 (4300-4570mV):" "$FOPTS" "$FINIT"
+            BATT_FULL=4400; i=0; v=4300
+            while [ "$v" -le 4570 ]; do
+                [ "$i" = "$SEL" ] && BATT_FULL=$v
+                i=$((i+1)); v=$((v+10))
+            done
+        else
+            BATT_FULL=0
+        fi
     fi
 
     LTPO_INIT=0
@@ -341,7 +399,9 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
 elif [ "$PRESET" != "1" ]; then
     ui_print "! 当前环境不支持按键交互 (无输入设备/权限)"
     ui_print "  使用默认/已有配置, 或在 /sdcard/dtbo_oc.conf 写入预设后重装:"
-    ui_print "  HZ_CHOICE=144 / 165 / 185 / 0(不超频), OC_MODE=dtbo 或 ko"
+    ui_print "  HZ_CHOICE=144/165/185/0(不超频), OC_MODE=dtbo/ko"
+    ui_print "  充电相关: BATT_LIMIT=0/1 BATT_UNCAP=0/1 BATT_VOFF=2700-3350"
+    ui_print "            BATT_MOD=0/1 BATT_FULL_ON=0/1 BATT_FULL=4300-4570"
     if [ -z "$CHOICES" ] || [ "$OC_OK" != "1" ]; then HZ_CHOICE=0; fi
 fi
 
@@ -357,59 +417,64 @@ else
     HZ_CHOICE=0
 fi
 
-[ -z "$BATTERY" ] && BATTERY=0
-case "$BATTERY" in 0|1|2|3|4|5|6) ;; *) BATTERY=0 ;; esac
+# 充电相关参数规范化 (v2.50 全自定义模型)
+[ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
+[ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
+[ -z "$BATT_MOD" ] && BATT_MOD=0
+[ -z "$BATT_FULL_ON" ] && BATT_FULL_ON=0
+[ -z "$BATT_VOFF" ] && BATT_VOFF=3000
+[ -z "$BATT_FULL" ] && BATT_FULL=0
+case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
+case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
+case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
+case "$BATT_FULL_ON" in 0|1) ;; *) BATT_FULL_ON=0 ;; esac
+case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=3000 ;; esac
+[ "$BATT_VOFF" -lt 2700 ] && BATT_VOFF=2700
+[ "$BATT_VOFF" -gt 3350 ] && BATT_VOFF=3350
+case "$BATT_FULL" in ''|*[!0-9]*) BATT_FULL=0 ;; esac
+[ "$BATT_FULL" -gt 0 ] && [ "$BATT_FULL" -lt 4300 ] && BATT_FULL=4300
+[ "$BATT_FULL" -gt 4570 ] && BATT_FULL=4570
 [ -z "$OC_MODE" ] && OC_MODE=dtbo
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
 if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then
     ui_print "! 未找到本机型 KO ($DEVICE.ko), 已保持 KO 方案"
     ui_print "  (侧载 KO 到 /data/adb/dtbo_oc/ko/ 后重启生效)"
 fi
-if [ "$OC_MODE" = "ko" ] && [ "$BATTERY" != "0" ]; then
-    BATTERY=0
-    ui_print "- KO 方案不修改 DTBO, 电池选项已重置为原版"
-fi
 [ -z "$LTPO_OFF" ] && LTPO_OFF=0
 case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
 
-if [ "$BATT_OK" != "1" ]; then
-    case "$BATTERY" in
-        3|4)
-            ui_print "- 魔改电池选项仅 ACE2Pro/一加11/一加12 支持, 已重置为原版"
-            BATTERY=0
-            ;;
-    esac
+if [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ]; then
+    ui_print "- 魔改电池仅 ACE2Pro/一加11/一加12 支持, 已重置为关闭"
+    BATT_MOD=0
 fi
-if [ "$DEVICE" = "gt7p" ]; then
-    case "$BATTERY" in
-        1|2|3|4|5)
-            ui_print "- gt7p 请使用 GT7P 专属解容选项, 其他电池选项已重置为原版"
-            BATTERY=0
-            ;;
-    esac
-elif [ "$BATTERY" = "6" ]; then
-    ui_print "- 电池选项 6 仅 GT7 Pro 竞速版支持, 已重置为原版"
-    BATTERY=0
+if [ "$BATT_FULL_ON" = "1" ] && [ "$BATT_FULL" = "0" ]; then
+    if [ "$BATT_FULL_DTS" -ge 4300 ] && [ "$BATT_FULL_DTS" -le 4570 ]; then
+        BATT_FULL=$BATT_FULL_DTS
+        ui_print "- 满充电压未指定, 已采用 DTBO 基准 ${BATT_FULL}mV"
+    else
+        BATT_FULL_ON=0
+        ui_print "- 满充电压未指定且 DTBO 基准未识别, 已重置为关闭"
+    fi
 fi
-case "$BATTERY" in
-    3|4)
-        ui_print "- 已选择: 6100mAh 魔改电池 (关机 3.0V / 1% 3.05V / 满充 4.54V)"
-        ;;
-    2|5)
-        ui_print "- 已选择: 电池解容 (关机 2.8V / 1% 2.85V / 显示真实电量)"
-        [ "$BATTERY" = "2" ] && ui_print "- 已选择: 解除充电限流"
-        ;;
-    6)
-        ui_print "- 已选择: GT7P 竞速版解容 (满充 4.55V / 关机 2.85V / 显示真实电量)"
-        ;;
-    1)
-        ui_print "- 已选择: 解除充电限流 (电池参数保持原版)"
-        ;;
-esac
+if [ "$OC_MODE" = "ko" ]; then
+    if [ "$BATT_LIMIT$BATT_UNCAP$BATT_MOD$BATT_FULL_ON" != "0000" ]; then
+        BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_FULL_ON=0
+        ui_print "- KO 方案不修改 DTBO, 充电相关功能已全部关闭"
+    fi
+fi
+if [ "$BATT_LIMIT" = "1" ]; then ui_print "- 已选择: 解除充电限流"; fi
+if [ "$BATT_UNCAP" = "1" ]; then ui_print "- 已选择: 电池解容 (关机 ${BATT_VOFF}mV / 1% $((BATT_VOFF+50))mV)"; fi
+if [ "$BATT_MOD" = "1" ]; then ui_print "- 已选择: 魔改电池 6100mAh"; fi
+if [ "$BATT_FULL_ON" = "1" ]; then ui_print "- 已选择: 满充 ${BATT_FULL}mV (DTBO 基准 $([ "$BATT_FULL_DTS" != "0" ] && echo "${BATT_FULL_DTS}mV" || echo "未识别"))"; fi
 
 cat > "$CONFIG" <<EOF
 HZ_CHOICE=$HZ_CHOICE
-BATTERY=$BATTERY
+BATT_LIMIT=$BATT_LIMIT
+BATT_UNCAP=$BATT_UNCAP
+BATT_VOFF=$BATT_VOFF
+BATT_MOD=$BATT_MOD
+BATT_FULL_ON=$BATT_FULL_ON
+BATT_FULL=$BATT_FULL
 OC_MODE=$OC_MODE
 LTPO_OFF=$LTPO_OFF
 FLASH=1
@@ -422,9 +487,9 @@ if [ "$OC_MODE" = "ko" ]; then
     ui_print "- 方案: KO 内核挂载, 档位 ${HZ_CHOICE}Hz (不修改任何分区)"
 else
     if [ "$HZ_CHOICE" != "0" ]; then
-        ui_print "- 方案: DTBO 补丁, 档位 ${HZ_CHOICE}Hz, 电池选项 $BATTERY"
+        ui_print "- 方案: DTBO 补丁, 档位 ${HZ_CHOICE}Hz"
     else
-        ui_print "- 方案: DTBO 补丁, 不超频, 电池选项 $BATTERY"
+        ui_print "- 方案: DTBO 补丁, 不超频 (仅充电相关功能)"
     fi
 fi
 if [ "$LTPO_OFF" = "1" ]; then
