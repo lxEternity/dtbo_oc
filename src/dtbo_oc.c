@@ -1980,7 +1980,7 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
 /* ------------------------------------------------------------------ */
 
 /* 电池/充电: 全自定义参数模型 (无固定预设值, 各项独立开关)
-   - 移除充电限流: 老平台删 qcom/oplus 限流节点, 新平台 oplus 策略表电流位 x2
+   - 移除充电限流: 老平台删 qcom/oplus 限流节点, 新平台 oplus 策略表电流位拉满 8000mA (幂等)
    - 电池解容: 自定义关机电压 voff (默认 3000mV, 下限 2700mV),
      1% 电量电压 = voff + 50mV, 充电中欠压阈值 = voff - 100mV
    - 魔改电池: 容量 -> 6100mAh (仅模块白名单机型; 电压参数走解容/满充自定义)
@@ -1998,7 +1998,7 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
 /* UFCS 策略表 5 元组首 cell 标识 (0x2af8) */
 #define UFCS_TUPLE_TAG  11000u
 
-/* oplus 策略表解除输入限流: 电流位 x2 上限 (mA) */
+/* oplus 策略表解除输入限流: 电流位绝对目标 (mA, 幂等) */
 #define BATT_STRAT_ICLMAX  8000u
 /* 策略表电流位放大下限 (mA): 低于此值视为涓流/异常表, 不放大 */
 #define BATT_STRAT_IMIN    100u
@@ -2312,7 +2312,7 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
                 if (verbose) fprintf(stderr, "[BATT] %s 满充电压位偏移 %+dmV x%d\n", pn, full_delta, fh);
             }
         }
-        /* 新平台解除限流: oplus 策略表电流位 x2 (cap 8000)
+        /* 新平台解除限流: oplus 策略表电流位拉满 8000 (绝对目标, 幂等)
            strategy_temp_range_curves 内为 (I,V,f) 三元组表, 其余为 5 元组表:
            UFCS (0x2af8,V,I,f,f) 电流位=base+2; 无 tag (V,I,f,f,f) 首 cell 为
            电池电压 (3800-4900mV) 时电流位=base+1, 首 cell 非电压的模糊表跳过;
@@ -2325,12 +2325,11 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
             int nhit = 0;
             if (n >= 3) {
                 if (in_curves) {
+                    /* 绝对目标 8000 (幂等: 已是 8000 不再命中, 重复应用不翻倍) */
                     for (int j = 0; j + 3 <= n; j += 3) {
                         uint32_t cur = cells[j];
                         if (cur >= BATT_STRAT_IMIN && cur < BATT_STRAT_ICLMAX) {
-                            uint32_t ni = cur * 2;
-                            if (ni > BATT_STRAT_ICLMAX) ni = BATT_STRAT_ICLMAX;
-                            cells[j] = ni; nhit++;
+                            cells[j] = BATT_STRAT_ICLMAX; nhit++;
                         }
                     }
                 } else {
@@ -2347,9 +2346,7 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
                             for (int ip = 1; ip <= 2; ip++) {
                                 uint32_t cur = cells[base + ip];
                                 if (cur >= BATT_STRAT_IMIN && cur < BATT_STRAT_ICLMAX) {
-                                    uint32_t ni = cur * 2;
-                                    if (ni > BATT_STRAT_ICLMAX) ni = BATT_STRAT_ICLMAX;
-                                    cells[base + ip] = ni; nhit++;
+                                    cells[base + ip] = BATT_STRAT_ICLMAX; nhit++;
                                 }
                             }
                         }
@@ -2361,9 +2358,7 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
                             else continue;
                             uint32_t cur = cells[ipos];
                             if (cur >= BATT_STRAT_IMIN && cur < BATT_STRAT_ICLMAX) {
-                                uint32_t ni = cur * 2;
-                                if (ni > BATT_STRAT_ICLMAX) ni = BATT_STRAT_ICLMAX;
-                                cells[ipos] = ni; nhit++;
+                                cells[ipos] = BATT_STRAT_ICLMAX; nhit++;
                             }
                         }
                     }
@@ -3118,7 +3113,7 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
             dts_free(&pd);
         }
         if (!bc->full_base)
-            die("--batt-full 指定但镜像内未找到满充电压节点 (full_ffc_vbat / full_voltage / 策略表)");
+            fprintf(stderr, "[BATT][WARN] --batt-full 指定但未找到满充基准节点 (基准可能已修改过, 满充偏移跳过)\n");
         if (bc->full_mv != bc->full_base && verbose)
             fprintf(stderr, "[BATT] 满充基准 %umV -> 目标 %umV (偏移 %+dmV)\n",
                     bc->full_base, bc->full_mv, (int)bc->full_mv - (int)bc->full_base);
@@ -3191,12 +3186,15 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
     }
     if (bc->mod && !bc->saw_cap)
         die("魔改电池开启但未找到容量节点 (仅 ACE2Pro/一加11/一加12 支持魔改, 请勿在其他机型使用)");
+    /* 零命中不中止 (幂等): stock 基准可能已被旧版本/外部工具修改过
+       (限流已删/电流已放大/关机电压已是目标值), 视为已生效仅告警;
+       verify_battery_dts 兜底校验最终镜像的实际状态 */
     if (bc->uncap && bc->voff_hits == 0 && bc->voff_ins == 0)
-        die("电池解容未找到可修改的关机电压节点 (qcom,vbatt_power_off / oplus,chg_shutdown_max_mv)");
+        fprintf(stderr, "[BATT][WARN] 电池解容未找到关机电压节点 (基准可能已修改过, 视为已生效)\n");
     if (bc->limit && bc->removed_lines == 0 && bc->strat_hits == 0)
-        die("移除充电限流未找到可修改的限流节点 (qcom 限流节点 / oplus 策略表)");
+        fprintf(stderr, "[BATT][WARN] 移除充电限流未找到限流节点 (基准可能已修改过, 视为已生效)\n");
     if (bc->full_mv && bc->full_base && bc->full_mv != bc->full_base && bc->full_hits == 0)
-        die("自定义满充电压未找到可修改的满充节点");
+        fprintf(stderr, "[BATT][WARN] 自定义满充未命中满充节点 (基准可能已修改过, 视为已生效)\n");
     if (total_added == 0 && total_fixed == 0 &&
         !(bc->cap_hits || bc->voff_hits || bc->voff_ins || bc->full_hits || bc->removed_lines || bc->strat_hits)) {
         fprintf(stderr, "[DONE] 没有任何条目被修改 (无需档位或已有档位)\n");
@@ -3280,7 +3278,7 @@ int main(int argc, char **argv) {
             "                margin>=144:1.0208 GT7P 同族拟合, transfer>=142 x0.938; 修复 165 档不开机)\n"
             "      [--min-clone] 静态最小克隆 (op12/op13/op13t/ace5/ace5p): porch/phy/vsync/\n"
             "                transfer 全部原值, 时钟纯等比 margin=1.0 (一加13 社区实机验证模型)\n"
-            "      [--batt-limit]     移除充电限流 (全机型: 老平台删qcom限流节点/新平台策略表电流x2)\n"
+            "      [--batt-limit]     移除充电限流 (全机型: 老平台删qcom限流节点/新平台策略表电流拉满8000mA)\n"
             "      [--batt-uncap]    电池解容: 自定义关机电压 (1%%电量=关机+50mV, 充电中欠压=关机-100mV)\n"
             "      [--batt-voff MV]  关机电压 mV, 默认 3000, 下限 2700 (与 --batt-uncap 配合)\n"
             "      [--batt-mod]      魔改电池: 容量->6100mAh (仅 ACE2Pro/一加11/一加12)\n"

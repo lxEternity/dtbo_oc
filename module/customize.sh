@@ -17,7 +17,7 @@ if [ "$ARCH64" != "arm64-v8a" ]; then
 fi
 
 ui_print "*******************************"
-ui_print " 超频解容模块 (多机型) v2.50"
+ui_print " 超频解容模块 (多机型) v2.51"
 ui_print "*******************************"
 ui_print "- 安全架构: 安装零分区写入, 不碰校验分区"
 ui_print "- 安装二进制: dtbo_oc + dtc (静态 arm64)"
@@ -334,7 +334,7 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
         ui_print "- 充电相关 (独立开关, 可任意组合; DTBO 基准: 关机 $([ "$BATT_VOFF_DTS" != "0" ] && echo "${BATT_VOFF_DTS}mV" || echo "未识别") / 满充 $([ "$BATT_FULL_DTS" != "0" ] && echo "${BATT_FULL_DTS}mV" || echo "未识别"))"
 
         L_INIT=0; [ "${BATT_LIMIT:-0}" = "1" ] && L_INIT=1
-        ui_choose "解除充电限流 (删限流节点/策略表电流翻倍):" "关闭|开启" "$L_INIT"
+        ui_choose "解除充电限流 (删限流节点/策略表电流拉满8000mA):" "关闭|开启" "$L_INIT"
         BATT_LIMIT=$([ "$SEL" = "1" ] && echo 1 || echo 0)
 
         U_INIT=0; [ "${BATT_UNCAP:-0}" = "1" ] && U_INIT=1

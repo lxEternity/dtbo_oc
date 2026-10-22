@@ -201,7 +201,7 @@ choose() {
 }
 
 echo "=============================================="
-echo " 超频解容模块 v2.50 — 配置菜单"
+echo " 超频解容模块 v2.51 — 配置菜单"
 echo " 机型: $DEVNAME ($DEVICE)"
 echo "$TIPS"
 echo "=============================================="
@@ -282,7 +282,7 @@ else
     echo " 充电相关 (独立开关, 可任意组合; DTBO 基准: 关机 $([ "$BATT_VOFF_DTS" != "0" ] && echo "${BATT_VOFF_DTS}mV" || echo "未识别") / 满充 $([ "$BATT_FULL_DTS" != "0" ] && echo "${BATT_FULL_DTS}mV" || echo "未识别"))"
 
     L_INIT=0; [ "$BATT_LIMIT" = "1" ] && L_INIT=1
-    choose "解除充电限流 (删限流节点/策略表充电电流翻倍):" "关闭|开启" "$L_INIT"
+    choose "解除充电限流 (删限流节点/策略表电流拉满8000mA):" "关闭|开启" "$L_INIT"
     BATT_LIMIT=$([ "$SEL" = "1" ] && echo 1 || echo 0)
 
     U_INIT=0; [ "$BATT_UNCAP" = "1" ] && U_INIT=1
