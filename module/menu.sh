@@ -201,7 +201,7 @@ choose() {
 }
 
 echo "=============================================="
-echo " 超频解容模块 v2.52 — 配置菜单"
+echo " 超频解容模块 v2.43 — 配置菜单"
 echo " 机型: $DEVNAME ($DEVICE)"
 echo "$TIPS"
 echo "=============================================="
@@ -407,9 +407,6 @@ FLASH=1
 BACKUP_PATH=/sdcard/dtbo_backup.img
 DTBO_PATH=
 EOF
-fi
-if [ "$OC_MODE" = "dtbo" ]; then
-    rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
 fi
 
 if command -v resetprop >/dev/null 2>&1; then

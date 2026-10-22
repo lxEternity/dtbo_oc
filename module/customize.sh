@@ -17,7 +17,7 @@ if [ "$ARCH64" != "arm64-v8a" ]; then
 fi
 
 ui_print "*******************************"
-ui_print " 超频解容模块 (多机型) v2.52"
+ui_print " 超频解容模块 (多机型) v2.43"
 ui_print "*******************************"
 ui_print "- 安全架构: 安装零分区写入, 不碰校验分区"
 ui_print "- 安装二进制: dtbo_oc + dtc (静态 arm64)"
@@ -481,7 +481,6 @@ FLASH=1
 BACKUP_PATH=/sdcard/dtbo_backup.img
 DTBO_PATH=
 EOF
-rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
 
 if [ "$OC_MODE" = "ko" ]; then
     ui_print "- 方案: KO 内核挂载, 档位 ${HZ_CHOICE}Hz (不修改任何分区)"
@@ -505,7 +504,6 @@ ui_print "  (未入群将打开QQ群卡片并阻止刷入; 已验证授权30天)
 ui_print "- 安全架构: 安装过程不写入任何分区"
 ui_print "  重启后 service.sh 自动: 备份原厂 -> 生成补丁 -> 刷入 dtbo"
 ui_print "  (第 1 次重启: 备份并刷入; 第 2 次重启: 新档位完整生效)"
-ui_print "- 救援保护: 补丁被还原(非OTA)时自动锁定, 防止救回后再刷"
 ui_print "- 若无法开机: fastboot 刷回原厂 dtbo 即可恢复"
 ui_print ""
 ui_print "安装完成! WebUI: KernelSU/Magisk 管理器 -> 超频解容 -> 打开WebUI"

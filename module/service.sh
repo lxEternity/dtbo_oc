@@ -92,14 +92,6 @@ sed -i '/^AVB_OFF=/d' "$CONFIG" 2>/dev/null
 [ -z "${OC_MODE:-}" ] && OC_MODE=dtbo
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
 
-LOCKED=$(getprop ro.boot.flash.locked)
-VBS=$(getprop ro.boot.verifiedbootstate)
-if [ "$LOCKED" = "1" ] || [ "$VBS" = "green" ]; then
-    log "[警告] Bootloader 检测为锁定/校验状态 (flash.locked=$LOCKED verifiedbootstate=$VBS)"
-    log "[警告] 未解锁 BL 刷入修改后的 DTBO 会导致无法开机(变砖)!"
-    log "[警告] 请确认已解锁 Bootloader, 否则请卸载本模块并恢复原始 DTBO"
-fi
-
 SLOT=$(getprop ro.boot.slot_suffix)
 DTBO="${DTBO_PATH:-}"
 if [ -z "$DTBO" ]; then
@@ -323,7 +315,6 @@ if [ "$NEED_OC" = "1" ]; then
                     if ! cmp -s "$CUR" "$STOCK"; then
                         if dd if="$STOCK" of="$DTBO" 2>>"$LOG"; then
                             sync
-                            rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
                             log "[门禁] 已恢复原厂 DTBO (撤销此前刷入的超频补丁)"
                         else
                             log "[警告] 恢复原厂 DTBO 失败, 建议手动恢复或重新验证"
@@ -343,7 +334,6 @@ if [ "$OC_MODE" = "ko" ]; then
         if ! cmp -s "$CUR" "$STOCK"; then
             log "正在恢复原厂 DTBO..."
             dd if="$STOCK" of="$DTBO" 2>>"$LOG" && sync
-            rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
             log "已恢复原厂 DTBO (KO 方案不修改分区)"
         fi
         exit 0
@@ -359,7 +349,6 @@ if [ "$OC_MODE" = "ko" ]; then
             exit 1
         fi
         sync
-        rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
         log "已恢复原厂 DTBO"
     fi
     log "KO 内核超频方案 (post-fs-data 阶段加载, 不修改任何分区)"
@@ -396,7 +385,7 @@ PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --workdir $WORK"
 [ "$DEVICE" = "gt7p" ] && PATCH_ARGS="$PATCH_ARGS --gt7p"
 [ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2 --min-clone"
 [ "$STRIP" != "0" ] && PATCH_ARGS="$PATCH_ARGS --strip-above $STRIP"
-[ "$DEVICE" = "op13" ] && PATCH_ARGS="$PATCH_ARGS --include-family wqhd_sdc --ref-clone --include-panel AA569_P_3_A0019_dsc_cmd"
+[ "$DEVICE" = "op13" ] && PATCH_ARGS="$PATCH_ARGS --include-family wqhd_sdc --ref-clone --include-panel AA569_P_3_A0019_dsc_cmd --include-project 0x5d0d"
 # 机型方法映射 (对齐慕容显示增强, 档位仍用本模块预设):
 # op13 (一加13) → 引用式克隆: 完全复刻社区实机验证镜像 (150档可开机) 的修改方法 —
 #   克隆 AA569 量产面板 120 档, 仅改 节点名/adfr映射表首cell/clock/framerate 四处,
@@ -454,20 +443,8 @@ if [ "${FLASH:-1}" != "1" ]; then
     exit 0
 fi
 
-if [ -f "$DATA_DIR/.rescue_lock" ]; then
-    log "[保护] 自动刷入已锁定 (此前检测到补丁 DTBO 被还原为原厂镜像)"
-    log "[保护] 这通常表示设备经 fastboot/手动救援恢复, 已停止写入以防再次变砖"
-    log "[保护] 解除: WebUI 重新保存配置 / menu 菜单重新应用 / 重装模块"
-    exit 0
-fi
-if [ -f "$DATA_DIR/.flash_fp" ] && cmp -s "$CUR" "$STOCK"; then
-    if [ "$(cat "$DATA_DIR/.flash_fp" 2>/dev/null)" = "$(getprop ro.build.fingerprint)" ]; then
-        log "[保护] 上次刷入的补丁 DTBO 已被还原为原厂 (系统版本未变, 非OTA)"
-        log "[保护] 判定为救援恢复, 已锁定自动刷入, 防止救回的设备再次写入"
-        log "[保护] 解除: WebUI 重新保存配置 / menu 菜单重新应用 / 重装模块"
-        touch "$DATA_DIR/.rescue_lock"
-        exit 0
-    fi
+if [ -f "$DATA_DIR/.rescue_lock" ] || [ -f "$DATA_DIR/.flash_fp" ]; then
+    rm -f "$DATA_DIR/.rescue_lock" "$DATA_DIR/.flash_fp"
 fi
 
 log "正在刷入 $NEW -> $DTBO"
@@ -480,7 +457,6 @@ VRF="$WORK/verify.img"
 dd if="$DTBO" of="$VRF" 2>>"$LOG"
 if cmp -s "$VRF" "$NEW"; then
     log "刷入成功且校验一致, 重启后新档位/电池方案生效"
-    getprop ro.build.fingerprint > "$DATA_DIR/.flash_fp" 2>/dev/null
 else
     log "[警告] 刷入后回读不一致! 建议检查分区或手动恢复备份"
     exit 1

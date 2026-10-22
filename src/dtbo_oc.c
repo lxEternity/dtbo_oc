@@ -1416,6 +1416,12 @@ typedef struct {
                                  后缀结尾的面板参与克隆 (如 AA569_P_3_A0019_dsc_cmd
                                  精确匹配量产面板, 排除 _evb/_evt 工程面板与其他
                                  供应商面板); 空 = 不过滤 */
+    char include_project[128]; /* root oplus,project-id 白名单 (逗号分隔, 0x 前缀十六
+                                  进制): 仅 project-id 任一 cell 匹配的条目参与修改
+                                  (含 strip/电池方案), 其余条目逐字节保留 — 实证镜像
+                                  只改量产项目 0x5d0d 条目 (entry 0/3/5), 同镜像内
+                                  0x5d57/0x5d55/0x5d56 变体项目条目 (entry 1/2/4)
+                                  完全未动; 空 = 不过滤 */
     int gt7p2;  /* GT7 Pro 竞速版新平台 (lafa/AC180): 静态最小克隆 — 基准固定原厂
                    120 档, porch/phy/vsync/adfr 保留原值, 仅改 name/framerate/
                    clockrate/transfer; margin 复用 GT7P 实测 (>=144:1.0208, 与
@@ -1540,7 +1546,41 @@ static int parse_u32_cells(const char *val, uint32_t *cells, int max);
 
 /* 对一个 dts 执行补丁; 返回新增节点数; dyn_added_out 非空时回写"动态最小克隆"新增数 */
 static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
-                     char (*stock_names)[160], int stock_n, int *fixed_out, int *dyn_added_out) {
+                     char (*stock_names)[160], int stock_n, int *fixed_out, int *dyn_added_out,
+                     int *panel_hits_out) {
+    /* root project-id 白名单: 不匹配的条目 (含 strip/电池方案) 整体跳过, 逐字节保留 */
+    if (cfg->include_project[0]) {
+        char wtmp[256]; snprintf(wtmp, sizeof(wtmp), "%s", cfg->include_project);
+        unsigned long want[16]; int nw = 0;
+        char *wsave, *wtok;
+        for (wtok = strtok_r(wtmp, ",", &wsave); wtok; wtok = strtok_r(NULL, ",", &wsave)) {
+            char *endp; unsigned long v = strtoul(wtok, &endp, 0);
+            if (endp != wtok && nw < 16) want[nw++] = v;
+        }
+        int ok = 0;
+        for (int i = 0; i < d->n && i < 256 && !ok; i++) {
+            const char *q = d->lines[i];
+            while (*q == ' ' || *q == '\t') q++;
+            if (strncmp(q, "oplus,project-id", 16)) continue;
+            const char *p = strchr(q, '<');
+            if (!p) continue;
+            for (const char *c = p; *c && *c != '>'; c++) {
+                if (*c == '<' || *c == ' ' || *c == '\t') continue;
+                char *endp; unsigned long v = strtoul(c, &endp, 0);
+                if (endp == c) { while (*c && *c != '>' && *c != ' ') c++; continue; }
+                for (int w = 0; w < nw; w++) if (want[w] == v) { ok = 1; break; }
+                if (ok) break;
+                c = endp - 1;
+            }
+        }
+        if (!ok) {
+            if (verbose) fprintf(stderr, "[跳过] project-id 不在白名单, 该条目逐字节保留\n");
+            if (fixed_out) *fixed_out = 0;
+            if (dyn_added_out) *dyn_added_out = 0;
+            /* panel_hits_out 为跨条目累加计数, 此处不得清零 */
+            return 0;
+        }
+    }
     TNode *nodes = xmalloc(sizeof(TNode) * MAX_NODES);
     int nn = scan_timing_nodes(d, nodes, MAX_NODES);
     /* 脏基准清理 (strip_above>0): 剥离旧版模组/社区镜像遗留的 OC 克隆节点,
@@ -1632,6 +1672,7 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
                 if (pl >= tl && !strcmp(t->panel_name + pl - tl, tok)) { ok = 1; break; }
             }
             if (!ok) continue;
+            if (panel_hits_out) (*panel_hits_out)++;
         }
         int found = -1;
         for (int k = 0; k < npb; k++)
@@ -1753,7 +1794,8 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
         name_has_hz_suffix(B->name, bfam, sizeof(bfam));
         if (B->rate < 60) continue;
         /* 该面板生成的名字需检查冲突: 全文件所有节点名 */
-        for (int ti = 0; ti < cfg->n; ti++) {
+        for (int tq = 0; tq < cfg->n; tq++) {
+            int ti = cfg->ref_clone ? cfg->n - 1 - tq : tq;
             int hz = cfg->hz[ti];
             /* 慕容式智能选基: 每个目标档独立选取最近的静态原厂基准;
                非 murong 模式保持面板最高档基准 (S 恒等于 B) */
@@ -2012,14 +2054,23 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
             /* 简化: 按 hz 升序生成, 依次插到 base 前 → 最终顺序为 …, 小, 大, base? 不对。
                依次插入同一位置: 插入序 hz 升序 → 每次新行放在上一个克隆之前 → 最终呈现降序? 
                直接收集: 同一 base 的多个克隆, 生成时按 hz 降序追加到同一个块里。 */
-            if (nins > 0 && ins[nins-1].at == S->start) {
+            /* 引用式克隆插入点: 面板最后一个 timing 节点之后 (面板末尾追加) —
+               实证镜像新档位于面板 timing 列表末尾且按 hz 升序 (130,141,144,150),
+               非基准节点前插入 (旧实现插在基准组后呈降序, 语义等价但与实证镜像
+               逐字节不一致); ref_clone 反向遍历 cfg->hz (内部降序) → 生成序即升序 */
+            int ins_at = S->start;
+            if (cfg->ref_clone) {
+                for (int j = 0; j < nn; j++)
+                    if (nodes[j].panel == B->panel && nodes[j].end > ins_at) ins_at = nodes[j].end;
+            }
+            if (nins > 0 && ins[nins-1].at == ins_at) {
                 /* 追加到已有块: 保持降序 → 新的 hz 若更小应插在前面? 我们在外层 ti 从大到小遍历 cfg->hz, 因此后到的更小, 应排在已有块之后? 教程顺序: 165,144,120(降序) */
                 ins[nins-1].lines = xrealloc(ins[nins-1].lines, sizeof(char*) * (ins[nins-1].n + cn));
                 memcpy(ins[nins-1].lines + ins[nins-1].n, cl, sizeof(char*) * cn);
                 ins[nins-1].n += cn;
                 free(cl);
             } else {
-                ins[nins].at = S->start;
+                ins[nins].at = ins_at;
                 ins[nins].lines = cl; ins[nins].n = cn;
                 nins++;
                 if (nins >= 512) die("插入块过多");
@@ -3125,7 +3176,7 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
     uint8_t **repl = xmalloc(sizeof(uint8_t*) * img.count);
     size_t *repl_n = xmalloc(sizeof(size_t) * img.count);
     int *replaced = xmalloc(sizeof(int) * img.count);
-    int total_added = 0, total_fixed = 0;
+    int total_added = 0, total_fixed = 0, total_panel_hits = 0;
 
     /* 容量预算试算: 多面板 x 梯度档位的膨胀 (每条目相同增长 x 条目数) 可能超出
        分区 AVB 尾部前的剩余空间 (一加15: 16 条目 20.4MB, 可增长仅 ~3.6MB,
@@ -3166,7 +3217,7 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
                     for (int k = 0; k < snn; k++) snprintf(stock_names[stock_n++], 160, "%s", sn[k].name);
                     free(sn); dts_free(&sd);
                 }
-                int added = patch_dts(&d, cfg, verbose, stock_names, stock_n, NULL, NULL);
+                int added = patch_dts(&d, cfg, verbose, stock_names, stock_n, NULL, NULL, NULL);
                 free(stock_names);
                 dts_save(&d, t_out);
                 dts_free(&d);
@@ -3254,7 +3305,8 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
         /* 电池补丁先于时序克隆 (行替换/删除不影响后续重扫描) */
         int batt_changed = patch_battery_dts(&d, bc, verbose);
         int fixed_ci = 0, dyn_added = 0;
-        int added = patch_dts(&d, cfg, verbose, stock_names, stock_n, &fixed_ci, &dyn_added);
+        int added = patch_dts(&d, cfg, verbose, stock_names, stock_n, &fixed_ci, &dyn_added,
+                              &total_panel_hits);
         free(stock_names);
         if (added <= 0 && batt_changed <= 0 && fixed_ci <= 0) { dts_free(&d); continue; }
         dts_save(&d, out_dts);
@@ -3289,6 +3341,12 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
         fprintf(stderr, "[BATT][WARN] 移除充电限流未找到限流节点 (基准可能已修改过, 视为已生效)\n");
     if (bc->full_mv && bc->full_base && bc->full_mv != bc->full_base && bc->full_hits == 0)
         fprintf(stderr, "[BATT][WARN] 自定义满充未命中满充节点 (基准可能已修改过, 视为已生效)\n");
+    /* 面板白名单 (ref_clone) 未验证成功必须拦截: 白名单的意义就是只对实机验证过的
+       面板做超频克隆, 未命中说明新系统版本面板名已变化, 贸然克隆未经证实的面板
+       有不开机风险 — 不放行, 未做任何写入 */
+    if (cfg->include_panel[0] && total_panel_hits == 0 && cfg->n > 0)
+        die("面板白名单 (--include-panel %s) 未命中任何面板 — 新系统版本面板名可能已变化, 已拦截刷入 (未做任何写入); 请反馈新镜像以更新白名单",
+            cfg->include_panel);
     if (total_added == 0 && total_fixed == 0 &&
         !(bc->cap_hits || bc->voff_hits || bc->voff_ins || bc->full_hits || bc->removed_lines || bc->strat_hits)) {
         fprintf(stderr, "[DONE] 没有任何条目被修改 (无需档位或已有档位)\n");
@@ -3379,6 +3437,10 @@ int main(int argc, char **argv) {
             "      [--include-panel AA569_P_3_A0019_dsc_cmd] 面板名后缀白名单 (逗号分隔):\n"
             "                仅面板名以指定后缀结尾的面板克隆 (排除 _evb/_evt 工程面板与\n"
             "                其他供应商面板); 与 --include-family 配合使用\n"
+            "      [--include-project 0x5d0d] root oplus,project-id 白名单 (逗号分隔, 0x 前缀\n"
+            "                十六进制): 仅 project-id 含指定值的条目参与修改, 其余条目逐字节\n"
+            "                保留 — 社区实证镜像只改量产项目 0x5d0d 条目 (entry 0/3/5),\n"
+            "                0x5d57/0x5d55/0x5d56 变体项目条目 (entry 1/2/4) 完全不动\n"
             "      [--batt-limit]     移除充电限流 (全机型: 老平台删qcom限流节点/新平台策略表电流拉满8000mA)\n"
             "      [--batt-uncap]    电池解容: 自定义关机电压 (1%%电量=关机+50mV, 充电中欠压=关机-100mV)\n"
             "      [--batt-voff MV]  关机电压 mV, 默认 3000, 下限 2700 (与 --batt-uncap 配合)\n"
@@ -3399,6 +3461,7 @@ int main(int argc, char **argv) {
     double mlow = 1.012205, mhigh = 1.021537;
     int no_phy = 0, verbose = 0, gt7p = 0, multifam = 0, min_clone = 0, gt7p2 = 0, gt7s = 0, ref_clone = 0;
     const char *inc_panel = "";
+    const char *inc_project = "";
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--img") && i+1 < argc) img = argv[++i];
         else if (!strcmp(argv[i], "--stock-img") && i+1 < argc) stock = argv[++i];
@@ -3429,6 +3492,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--min-clone")) min_clone = 1;
         else if (!strcmp(argv[i], "--ref-clone")) ref_clone = 1;
         else if (!strcmp(argv[i], "--include-panel") && i+1 < argc) inc_panel = argv[++i];
+        else if (!strcmp(argv[i], "--include-project") && i+1 < argc) inc_project = argv[++i];
         else if (!strcmp(argv[i], "-v")) verbose = 1;
         else die("未知参数: %s", argv[i]);
     }
@@ -3499,6 +3563,7 @@ int main(int argc, char **argv) {
         cfg.min_clone = min_clone;
         cfg.ref_clone = ref_clone;
         snprintf(cfg.include_panel, sizeof(cfg.include_panel), "%s", inc_panel);
+        snprintf(cfg.include_project, sizeof(cfg.include_project), "%s", inc_project);
         if (wxh && strcmp(wxh, "auto")) {
             if (sscanf(wxh, "%ux%u", &cfg.wx, &cfg.wy) != 2) die("--wxh 格式: 宽x高 (如 1240x2772)");
             cfg.wxh_filter = 1;

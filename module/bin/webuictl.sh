@@ -878,9 +878,6 @@ EOF
             set_config_val OC_MODE "$OC_MODE"
             set_config_val LTPO_OFF "$LTPO_OFF"
         fi
-        if [ "$OC_MODE" = "dtbo" ] && { [ "$HZ" != "0" ] || batt_active; }; then
-            rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
-        fi
         if ltpo_apply; then
             if [ "$LTPO_OFF" = "1" ]; then
                 MSG="${MSG}LTPO 已禁用 (已即时应用); "
@@ -930,7 +927,7 @@ EOF
                     ;;
             esac
         fi
-        rm -f "$DATA_DIR/ko_loaded" "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
+        rm -f "$DATA_DIR/ko_loaded"
         RESTORED=0
         if [ -n "$DTBO" ] && [ -f "$STOCK" ]; then
             if dd if="$STOCK" of="$DTBO" 2>/dev/null; then
