@@ -17,10 +17,10 @@ if [ "$ARCH64" != "arm64-v8a" ]; then
 fi
 
 ui_print "*******************************"
-ui_print " 超频解容模块 (多机型) v2.43"
+ui_print " 超频解容模块 "
 ui_print "*******************************"
-ui_print "- 安全架构: 安装零分区写入, 不碰校验分区"
-ui_print "- 安装二进制: dtbo_oc + dtc (静态 arm64)"
+
+ui_print "- 安装"
 TOOL="$MODPATH/arm64/dtbo_oc"
 DTC="$MODPATH/arm64/dtc"
 chmod 755 "$TOOL" "$DTC" \
@@ -29,8 +29,8 @@ mkdir -p "$MODPATH/bin" "$MODPATH/ko" 2>/dev/null
 
 "$TOOL" >/dev/null 2>&1; BINRC=$?
 if [ "$BINRC" -ge 126 ]; then
-    ui_print "! dtbo_oc 二进制无法执行 (rc=$BINRC)"
-    ui_print "! 无法进行QQ群验证, 中止安装"
+    ui_print "! 二进制无法执行 (rc=$BINRC)"
+    ui_print "! 无法验证, 中止安装"
     abort
 fi
 
@@ -46,10 +46,10 @@ case "$LICOUT" in
     LICENSE=ok*)
         LIC_QQ=$(printf '%s\n' "$LICOUT" | sed -n 's/^LICENSE=ok QQ=\([0-9]*\) .*/\1/p')
         LIC_EXP=$(printf '%s\n' "$LICOUT" | sed -n 's/.*EXPIRY_DATE=//p')
-        ui_print "- QQ群验证: 已通过 (QQ $LIC_QQ, 有效期至 $LIC_EXP), 跳过"
+        ui_print "- 身份验证: 已通过 (QQ $LIC_QQ, 有效期至 $LIC_EXP), 跳过"
         ;;
     *)
-        ui_print "- QQ群验证: 自动检测本机QQ并联网核对群名单..."
+        ui_print "- 身份验证: 自动检测本机QQ并联网核对群名单..."
         VOUT=$("$TOOL" verify --auto 2>&1)
         VRC=$?
         VREASON=$(printf '%s\n' "$VOUT" | sed -n 's/.*REASON=//p')
@@ -58,7 +58,7 @@ case "$LICOUT" in
             VEXP=$(printf '%s\n' "$VOUT" | sed -n 's/.*EXPIRY_DATE=//p')
             ui_print "  验证通过: 本机QQ $VQQ 在群内, 授权30天 (至 $VEXP)"
         elif [ "$VREASON" = "not_in_group" ]; then
-            ui_print "  本机QQ未加入指定QQ群, 已打开QQ群卡片, 加群后重新安装"
+            ui_print "  本机QQ未加入指定QQ群,  向管理员提交ID后重新安装"
             "$TOOL" joingroup 2>/dev/null
             abort
         elif [ "$VREASON" = "not_in_group_cached" ]; then
@@ -150,6 +150,7 @@ case "$DEVICE" in
         ;;
 esac
 [ -n "$DEVNAME" ] && ui_print "- 机型识别: $DEVNAME ($DEVICE) 原厂最高档 ${MAXRATE:-?}Hz"
+[ -n "$DEVICE" ] && sed -i "s/^description=.*/description=为 ${DEVNAME} 定制的超频解容模块/" "$MODPATH/module.prop" 2>/dev/null
 if [ "$DEVICE" = "op11" ]; then
     ui_print "- 本机型不支持刷新率超频, 仅电池/充电方案可用"
 fi
@@ -481,6 +482,7 @@ FLASH=1
 BACKUP_PATH=/sdcard/dtbo_backup.img
 DTBO_PATH=
 EOF
+rm -f "$DATA_DIR/.flash_fp" "$DATA_DIR/.rescue_lock"
 
 if [ "$OC_MODE" = "ko" ]; then
     ui_print "- 方案: KO 内核挂载, 档位 ${HZ_CHOICE}Hz (不修改任何分区)"
@@ -499,11 +501,11 @@ else
 fi
 
 ui_print " "
-ui_print "- v2.3.7 QQ群验证+主板ID绑定, WebUI 主题定制"
-ui_print "  (未入群将打开QQ群卡片并阻止刷入; 已验证授权30天)"
-ui_print "- 安全架构: 安装过程不写入任何分区"
-ui_print "  重启后 service.sh 自动: 备份原厂 -> 生成补丁 -> 刷入 dtbo"
+
+
+ui_print "  重启后  自动备份原厂dtbo并生成补丁刷入"
 ui_print "  (第 1 次重启: 备份并刷入; 第 2 次重启: 新档位完整生效)"
+
 ui_print "- 若无法开机: fastboot 刷回原厂 dtbo 即可恢复"
 ui_print ""
-ui_print "安装完成! WebUI: KernelSU/Magisk 管理器 -> 超频解容 -> 打开WebUI"
+ui_print "安装完成! 如需修改超频配置请重启到WEBUI页面重新保存"

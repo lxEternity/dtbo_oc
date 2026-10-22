@@ -58,7 +58,7 @@ esac
 HZ_CHOICE=""; OC_MODE=""; LTPO_OFF=""
 BATT_LIMIT=""; BATT_UNCAP=""; BATT_MOD=""; BATT_FULL_ON=""; BATT_VOFF=""; BATT_FULL=""
 [ -f "$CONFIG" ] && . "$CONFIG"
-# v2.50 配置迁移: 旧版 BATTERY 固定方案 -> 充电相关独立开关 (一次性)
+
 if [ -n "$BATTERY" ]; then
     case "$BATTERY" in
         1) BATT_LIMIT=1 ;;
@@ -72,7 +72,7 @@ if [ -n "$BATTERY" ]; then
     { echo "BATT_LIMIT=${BATT_LIMIT:-0}"; echo "BATT_UNCAP=${BATT_UNCAP:-0}"
       echo "BATT_VOFF=${BATT_VOFF:-3000}"; echo "BATT_MOD=${BATT_MOD:-0}"
       echo "BATT_FULL_ON=${BATT_FULL_ON:-0}"; echo "BATT_FULL=${BATT_FULL:-0}"; } >> "$CONFIG"
-    echo " 已迁移旧版电池方案 BATTERY=$BATTERY 到充电相关独立开关"
+   
     BATTERY=""
 fi
 [ -z "$HZ_CHOICE" ] && HZ_CHOICE=144
@@ -201,7 +201,7 @@ choose() {
 }
 
 echo "=============================================="
-echo " 超频解容模块 v2.43 — 配置菜单"
+echo " 超频解容模块"
 echo " 机型: $DEVNAME ($DEVICE)"
 echo "$TIPS"
 echo "=============================================="
@@ -211,19 +211,19 @@ case "$LICOUT" in
     LICENSE=ok*)
         LIC_QQ=$(printf '%s\n' "$LICOUT" | sed -n 's/^LICENSE=ok QQ=\([0-9]*\) .*/\1/p')
         LIC_EXP=$(printf '%s\n' "$LICOUT" | sed -n 's/.*EXPIRY_DATE=//p')
-        echo " QQ群验证: 已通过 (QQ $LIC_QQ, 有效期至 $LIC_EXP)"
+        echo " 身份验证: 已通过 (QQ $LIC_QQ, 有效期至 $LIC_EXP)"
         ;;
     *)
-        echo " QQ群验证: 未通过, 尝试自动验证本机QQ..."
+        echo " 身份验证: 未通过, 尝试自动验证本机QQ..."
         if "$TOOL" verify --auto >/dev/null 2>&1; then
             LICOUT=$("$TOOL" license 2>/dev/null)
             LIC_QQ=$(printf '%s\n' "$LICOUT" | sed -n 's/^LICENSE=ok QQ=\([0-9]*\) .*/\1/p')
             LIC_EXP=$(printf '%s\n' "$LICOUT" | sed -n 's/.*EXPIRY_DATE=//p')
-            echo " QQ群验证: 自动通过 (本机QQ $LIC_QQ, 有效期至 $LIC_EXP)"
+            echo " 身份验证: 自动通过 (本机QQ $LIC_QQ, 有效期至 $LIC_EXP)"
         else
         echo "----------------------------------------------"
         echo " 自动验证未通过, 可手动输入QQ号验证"
-        echo " (验证需联网拉取群成员名单, 通过后授权30天)"
+        echo " (验证需联网拉取群成员名单,)"
         VERIFY_OK=0
         TRIES=0
         while [ "$TRIES" -lt 3 ] && [ "$VERIFY_OK" != "1" ]; do
@@ -239,8 +239,8 @@ case "$LICOUT" in
         done
         if [ "$VERIFY_OK" != "1" ]; then
             echo "----------------------------------------------"
-            echo "[退出] 未完成QQ群验证, 无法使用超频功能"
-            echo "       加入QQ群后可通过本菜单 / WebUI 重新验证"
+            echo "[退出] 未完成身份验证, 无法使用超频功能"
+            echo " QQ群内向管理员提交ID后重新验证"
             exit 1
         fi
         fi

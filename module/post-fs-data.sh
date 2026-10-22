@@ -36,8 +36,8 @@ LICOUT=$("$TOOL" license 2>/dev/null)
 case "$LICOUT" in
     LICENSE=ok*) : ;;
     *)
-        klog "[门禁] QQ群验证未通过 ($LICOUT), 跳过 KO 加载"
-        klog "[门禁] 请通过 WebUI 或终端菜单完成QQ群验证 (联网验证, 授权30天)"
+        klog "  验证未通过 ($LICOUT), 跳过 KO 加载"
+        klog "  请通过QQ群向管理员提交QQ号和主板ID验证"
         exit 0
         ;;
 esac

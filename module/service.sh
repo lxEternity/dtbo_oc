@@ -14,7 +14,7 @@ mkdir -p "$DATA_DIR" "$WORK" "$WORK/ko"
 : > "$LOG"
 chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
 
-# v2.50: 充电控制功能已移除 — 停止 v2.49 遗留的 chgcv 守护并解除 votable 强制
+
 if [ -f "$DATA_DIR/chgcv.pid" ]; then
     kill "$(cat "$DATA_DIR/chgcv.pid" 2>/dev/null)" 2>/dev/null
     rm -f "$DATA_DIR/chgcv.pid"
@@ -29,8 +29,7 @@ if [ -d /proc/oplus-votable ]; then
 fi
 rm -f "$DATA_DIR/chgcv.conf" "$DATA_DIR/chgcv.state" "$DATA_DIR/chgcv.log" 2>/dev/null
 
-# 星驰式刷新率守护: 等 boot 完成后按 rc_config.json / apps.conf 启动 (幂等)
-# 启动条件: 全局档位锁定已设置(globalRateId!=0) 或 按应用切换开启且有规则
+
 (
     i=0
     while [ "$i" -lt 45 ]; do
@@ -71,7 +70,7 @@ EOF
     log "已生成默认配置 $CONFIG"
 fi
 . "$CONFIG"
-# v2.50 配置迁移: 旧版 BATTERY 固定方案 -> 充电相关自定义参数 (一次性)
+
 if grep -q '^BATTERY=' "$CONFIG" 2>/dev/null; then
     _OB=$(sed -n 's/^BATTERY=//p' "$CONFIG" | head -n 1)
     case "$_OB" in
@@ -208,33 +207,31 @@ STRIP=$(echo "$IDINFO" | grep '^STRIP_ABOVE=' | cut -d= -f2)
 [ -z "$OC_OK" ] && OC_OK=1
 CHOICES=""
 case "$DEVICE" in
-    # 原厂120可超185: ACE2Pro (无130)
+    
     ace2pro)   CHOICES="132 138 141 144 150 158 165 170 178 185"; DEF_HZ=144 ;;
-    # 一加13: 引用式克隆 (社区实机验证镜像同款方法, 仅 130/141/144/150 四档)
     op13)      CHOICES="130 141 144 150"; DEF_HZ=144 ;;
-    # 原厂120可超144→放开到150
+  
     op12|op13t|ace5|ace5p|ace3|ace3pro|gt7p2) CHOICES="130 132 138 141 144 148 150"; DEF_HZ=144 ;;
-    # 原厂120可超185: GT7 Pro/GT7S (165实测不开机保留移除)
-    gt7s)      CHOICES="130 132 138 141 144 148 150 158 170 178 185"; DEF_HZ=185 ;;
-    # GT7P竞速版 --gt7p 模式实测表
+ 
+    gt7s)      CHOICES="130 132 138 141 144 148 150 158 165 170 178 185"; DEF_HZ=185 ;;
+   
     gt7p)      CHOICES="130 142 144"; DEF_HZ=144 ;;
-    # 原厂144可超185: GT8 Pro
+    
     gt8p)      CHOICES="148 150 158 165 170 178 185 190"; DEF_HZ=185 ;;
-    # 原厂144可超195: GT8
+    
     gt8)       CHOICES="148 150 158 165 170 178 185 190 195 198 205"; DEF_HZ=185 ;;
-    # 原厂165可超185: ACE6T
+   
     ace6t)     CHOICES="170 178 185 190"; DEF_HZ=185 ;;
-    # 原厂165可超195: 一加15/15T/ACE6
+  
     op15|op15t|ace6) CHOICES="170 178 185 190 195 198 205"; DEF_HZ=185 ;;
-    # 原厂165可超185: ACE6至尊版 (MTK 简单克隆, 仅改帧率属性)
+    
     ace6u)     CHOICES="185"; DEF_HZ=185 ;;
     op11)      CHOICES=""; DEF_HZ=0 ;;
     *) log "[中止] 无法识别机型 (DEVICE=$DEVICE)"; exit 1 ;;
 esac
 log "机型识别: $DEVNAME ($DEVICE)"
 
-# 方案级选项 (与 customize.sh 一致): HZ_CHOICE 可为方案值或具体档位值
-# 选择任一方案 = 刷入该机型完整档位列表, 值仅作为方案标记
+
 PLANS=""
 case "$DEVICE" in
     ace2pro)     PLANS="144 165 185" ;;
@@ -263,7 +260,7 @@ else
     fi
 fi
 
-# 充电相关参数规范化 (v2.50 全自定义模型)
+
 [ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
 [ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
 [ -z "$BATT_MOD" ] && BATT_MOD=0
@@ -307,15 +304,15 @@ if [ "$NEED_OC" = "1" ]; then
             "$TOOL" verify --auto >>"$LOG" 2>&1
             LICOUT=$("$TOOL" license 2>/dev/null)
             case "$LICOUT" in
-                LICENSE=ok*) log "[门禁] 授权过期, 自动重新验证通过" ;;
+                LICENSE=ok*) log "  授权过期, 自动重新验证通过" ;;
                 *)
-                    log "[门禁] QQ群验证未通过 ($LICOUT), 拒绝修改 DTBO / 挂载 KO"
-                    log "[门禁] 请通过 WebUI 或终端菜单完成QQ群验证 (联网验证, 授权30天)"
+                    log "  QQ群验证未通过 ($LICOUT), 拒绝修改 DTBO / 挂载 KO"
+                    log "  请通过 WebUI 或终端菜单完成QQ群验证 (联网验证, 授权30天)"
                     ko_unload
                     if ! cmp -s "$CUR" "$STOCK"; then
                         if dd if="$STOCK" of="$DTBO" 2>>"$LOG"; then
                             sync
-                            log "[门禁] 已恢复原厂 DTBO (撤销此前刷入的超频补丁)"
+                            log "  已恢复原厂 DTBO (撤销此前刷入的超频补丁)"
                         else
                             log "[警告] 恢复原厂 DTBO 失败, 建议手动恢复或重新验证"
                         fi
@@ -361,7 +358,7 @@ if [ "$HZ_CHOICE" = "0" ]; then
     log "本机型不超频, 仅应用充电相关方案"
     [ "$BATT_ACTIVE" = "0" ] && { log "充电相关功能全部关闭, 无需任何修改"; exit 0; }
 else
-    # 选择任一超频档位即生成机型完整档位列表 (档位切换功能需要全部档位)
+   
     if [ "$DEVICE" = "gt7p" ]; then
         HZ="130,142,144"
     else
@@ -376,7 +373,7 @@ ko_unload
 NEW="$WORK/patched.img"
 rm -rf "$WORK"/e*_* 2>/dev/null
 PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --workdir $WORK"
-# 充电相关 (v2.50 全自定义参数): 各项独立开关, 与超频档位可任意组合
+
 [ "$BATT_LIMIT" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-limit"
 [ "$BATT_UNCAP" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-uncap --batt-voff $BATT_VOFF"
 [ "$BATT_MOD" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-mod"
@@ -386,19 +383,7 @@ PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --workdir $WORK"
 [ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2 --min-clone"
 [ "$STRIP" != "0" ] && PATCH_ARGS="$PATCH_ARGS --strip-above $STRIP"
 [ "$DEVICE" = "op13" ] && PATCH_ARGS="$PATCH_ARGS --include-family wqhd_sdc --ref-clone --include-panel AA569_P_3_A0019_dsc_cmd --include-project 0x5d0d"
-# 机型方法映射 (对齐慕容显示增强, 档位仍用本模块预设):
-# op13 (一加13) → 引用式克隆: 完全复刻社区实机验证镜像 (150档可开机) 的修改方法 —
-#   克隆 AA569 量产面板 120 档, 仅改 节点名/adfr映射表首cell/clock/framerate 四处,
-#   cell-index 保持 0x00 / transfer/porch/phy/vsync 及全部 DSI 命令保持基准原值
-#   (v2.51 旧 min-clone 给新档分配 cell-index 0x03+ 是不开机根因)
-# ace3/ace3pro/ace5/ace5p/op13t → 一加12方法: oplus+sdc 双供应商家族各克隆一组
-#   (multifam) + 慕容式智能选基 (min-clone: clock/transfer 纯等比, porch/phy 原值)
-# ace6u/ace6t/op15t/op15/ace6 → 一加15方法: min-clone 慕容式智能选基
-#   (ace6u 为 MTK 平台, 走简单克隆仅改帧率属性, min-clone 无害)
-# gt7s → GT8P 方法: min-clone (静态面板 murong 智能选基, sa_fhd 动态面板
-#   dyn-clk-list 等比缩放保留, porch/phy/vsync 原值)
-# gt8/gt8p: qsync 144 静态基准, 同 min-clone
-# ace2pro 除外: interp3 锚点即该机型教程实机标定, 保持标准模式
+
 case "$DEVICE" in
     ace3|ace3pro|ace5|ace5p|op13t|op12) PATCH_ARGS="$PATCH_ARGS --multifam --min-clone" ;;
     op15|op15t|ace6|ace6t|ace6u|gt8|gt8p|gt7s) PATCH_ARGS="$PATCH_ARGS --min-clone" ;;

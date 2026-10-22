@@ -65,8 +65,8 @@ function drawLicense() {
   box.classList.toggle('bad', !okLic && !!lic);
   if (okLic) {
     $('verify-text').textContent = lic.expiry === '永久'
-      ? '已验证Q群 永久'
-      : `已验证Q群 期限${lic.expiry || '未知'}`;
+      ? '已验证身份 永久'
+      : `已验证身份 期限${lic.expiry || '未知'}`;
     $('verify-caption').textContent = '已验证';
   } else if (lic?.state === 'expired') {
     $('verify-text').textContent = `授权已过期 (QQ ${lic.qq || ''}), 请重新验证`;
@@ -78,7 +78,7 @@ function drawLicense() {
     $('verify-text').textContent = '授权文件无效, 请重新验证';
     $('verify-caption').textContent = '无效';
   } else {
-    $('verify-text').textContent = '未验证 — 使用超频/刷入功能需先验证已加入QQ群';
+    $('verify-text').textContent = '未验证 — 使用超频/刷入功能需先验证已加入身份';
     $('verify-caption').textContent = '未验证';
   }
   $('machine-id').textContent = state?.machine || '—';
@@ -90,7 +90,7 @@ function controls() {
   document.body.classList.toggle('busy', busy);
   $('refresh').disabled = busy;
   $('apply').disabled = !ready || blocked;
-  $('apply-label').textContent = busy ? '正在处理…' : blocked ? '需先完成QQ群验证' : '保存并应用';
+  $('apply-label').textContent = busy ? '正在处理…' : blocked ? '需先完成身份验证' : '保存并应用';
   const hzText = sel.hz === 0 ? '不超频' : sel.hz ? `${sel.hz}Hz` : '—';
   const modeText = sel.oc_mode === 'ko' ? 'KO 挂载' : sel.oc_mode === 'dtbo' ? 'DTBO 补丁' : '—';
   $('selection').textContent = `${hzText} · ${modeText}`;
@@ -254,7 +254,7 @@ async function refresh(manual) {
 async function apply() {
   if (busy || !connected || !state) return;
   if (licBlocked()) {
-    notify('请先完成QQ群验证: 在上方输入QQ号并点击验证。', true);
+    notify('请先完成身份验证: 在上方输入QQ号并点击验证。', true);
     return;
   }
   busy = true;
@@ -308,7 +308,7 @@ async function verify(auto = false) {
   controls();
   $('verify-btn').disabled = true;
   $('verify-auto-btn').disabled = true;
-  notify(auto ? '正在自动检测本机QQ并联网验证…' : '正在联网验证QQ群成员身份…');
+  notify(auto ? '正在自动检测本机QQ并联网验证…' : '正在联网验证白名单身份…');
   try {
     await command(`verify ${arg}`, 120000);
     $('qq-input').value = '';
@@ -758,7 +758,7 @@ function chgDraw() {
     ? '当前为 KO 挂载方式, 充电相关功能不可用'
     : `基准关机 ${chg.voffDts ? `${chg.voffDts}mV` : '未识别'} · 基准满充 ${chg.fullDts ? `${chg.fullDts}mV` : '未识别'}`;
   $('chg-save').disabled = dis || koMode;
-  $('chg-save-label').textContent = chgBusy ? '正在处理…' : (!lic && anyOn ? '需先完成QQ群验证' : '保存并应用');
+  $('chg-save-label').textContent = chgBusy ? '正在处理…' : (!lic && anyOn ? '需先完成身份验证' : '保存并应用');
 }
 
 function chgMark() {
@@ -774,7 +774,7 @@ async function chgSave() {
   }
   const anyOn = chg.limit || chg.uncap || chg.mod || chg.full_on;
   if (anyOn && state.license?.state !== 'ok') {
-    chgNotify('请先在主页完成QQ群验证, 再开启充电相关功能。', true);
+    chgNotify('请先去群内向管理员提交ID完成身份验证, 再开启充电相关功能。', true);
     return;
   }
   chgBusy = true;
