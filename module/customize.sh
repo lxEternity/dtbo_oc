@@ -114,10 +114,15 @@ if [ -f "$STOCK" ]; then
     BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
     OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
     STRIP=$(echo "$IDINFO" | grep '^STRIP_ABOVE=' | cut -d= -f2)
-    BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
+    BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_STOCK=' | cut -d= -f2)
+    BATT_KIND=$(echo "$IDINFO" | grep '^BATT_KIND=' | cut -d= -f2)
+    BATT_VMIN=$(echo "$IDINFO" | grep '^BATT_VMIN=' | cut -d= -f2)
 fi
 [ -z "$STRIP" ] && STRIP=0
 [ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
+[ -z "$BATT_KIND" ] && BATT_KIND=1
+[ -z "$BATT_VMIN" ] && BATT_VMIN=2800
+BATT_KIND_NAME="硅碳"; [ "$BATT_KIND" = "0" ] && BATT_KIND_NAME="纯碳"
 
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
@@ -275,7 +280,7 @@ if [ -n "$BATTERY" ]; then
         3) BATT_MOD=1 ;;
         4) BATT_MOD=1; BATT_LIMIT=1 ;;
         5) BATT_UNCAP=1; BATT_VOFF=2800 ;;
-        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2850 ;;
+        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2800 ;;
     esac
     BATTERY=""
     ui_print "- 已迁移旧版电池方案到充电相关独立开关"
@@ -338,19 +343,21 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
         ui_choose "电池解容 (自定义关机电压, 释放底部隐藏电量):" "关闭|开启" "$U_INIT"
         BATT_UNCAP=$([ "$SEL" = "1" ] && echo 1 || echo 0)
         if [ "$BATT_UNCAP" = "1" ]; then
-            VOPTS=""; VINIT=3; i=0; v=2650
+            ui_print "- 原厂关机电压: $([ "$BATT_VOFF_DTS" != "0" ] && echo "${BATT_VOFF_DTS}mV" || echo "未识别") (电池类型: ${BATT_KIND_NAME})"
+            VOPTS=""; VINIT=7; i=0; v=2450
             [ -n "${BATT_VOFF:-}" ] || BATT_VOFF=2800
-            while [ "$v" -le 3150 ]; do
+            while [ "$v" -le 2800 ]; do
                 VOPTS="${VOPTS:+$VOPTS|}${v}mV"
                 [ "$BATT_VOFF" = "$v" ] && VINIT=$i
                 i=$((i+1)); v=$((v+50))
             done
             ui_choose "关机电压 (1%电量=关机+50mV, 充电中欠压=关机-100mV):" "$VOPTS" "$VINIT"
-            BATT_VOFF=2800; i=0; v=2650
-            while [ "$v" -le 3150 ]; do
+            BATT_VOFF=2800; i=0; v=2450
+            while [ "$v" -le 2800 ]; do
                 [ "$i" = "$SEL" ] && BATT_VOFF=$v
                 i=$((i+1)); v=$((v+50))
             done
+            ui_print "- 本机为${BATT_KIND_NAME}电池, 最低关机电压 ${BATT_VMIN}mV, 低于 ${BATT_VMIN} 可能会无效"
         fi
 
         if [ "$BATT_OK" = "1" ]; then
@@ -375,7 +382,7 @@ elif [ "$PRESET" != "1" ]; then
     ui_print "! 当前环境不支持按键交互 (无输入设备/权限)"
     ui_print "  使用默认/已有配置, 或在 /sdcard/dtbo_oc.conf 写入预设后重装:"
     ui_print "  HZ_CHOICE=144/165/185/0(不超频), OC_MODE=dtbo/ko"
-    ui_print "  充电相关: BATT_LIMIT=0/1 BATT_UNCAP=0/1 BATT_VOFF=2650-3150"
+    ui_print "  充电相关: BATT_LIMIT=0/1 BATT_UNCAP=0/1 BATT_VOFF=2450-2800"
     ui_print "            BATT_MOD=0/1"
     if [ -z "$CHOICES" ] || [ "$OC_OK" != "1" ]; then HZ_CHOICE=0; fi
 fi
@@ -401,8 +408,8 @@ case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
-[ "$BATT_VOFF" -lt 2650 ] && BATT_VOFF=2650
-[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
+[ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
+[ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
 [ -z "$OC_MODE" ] && OC_MODE=dtbo
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
 if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then

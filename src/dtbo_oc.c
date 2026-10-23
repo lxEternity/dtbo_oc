@@ -2126,14 +2126,14 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
 
 /* 电池/充电: 全自定义参数模型 (无固定预设值, 各项独立开关)
    - 移除充电限流: 老平台删 qcom/oplus 限流节点, 新平台 oplus 策略表电流位拉满 8000mA (幂等)
-   - 电池解容: 自定义关机电压 voff (默认 2800mV, 范围 2650-3150mV),
+   - 电池解容: 自定义关机电压 voff (默认 2800mV, 范围 2450-2800mV),
      1% 电量电压 = voff + 50mV, 充电中欠压阈值 = voff - 100mV
    - 魔改电池: 容量 -> 6100mAh (仅模块白名单机型) */
 #define BATT_CAP_MOD     6100u   /* 魔改电池容量 mAh */
 #define BATT_VOFF_DEF    2800u   /* 解容默认关机电压 mV */
-#define BATT_VOFF_MIN    2650u   /* 关机电压下限 mV */
-#define BATT_VOFF_MAX    3150u   /* 关机电压上限 mV */
-#define BATT_VOFF_SCAN_MIN 2500u /* 原厂关机电压识别窗口下限 mV */
+#define BATT_VOFF_MIN    2450u   /* 关机电压下限 mV */
+#define BATT_VOFF_MAX    2800u   /* 关机电压上限 mV */
+#define BATT_VOFF_SCAN_MIN 2400u /* 原厂关机电压识别窗口下限 mV */
 #define BATT_VOFF_SCAN_MAX 3600u /* 原厂关机电压识别窗口上限 mV */
 #define BATT_1P_OFST     50u     /* 1% 电量电压 = 关机电压 + 50mV */
 #define BATT_UVCHG_OFST  100u    /* 充电中欠压阈值 = 关机电压 - 100mV */
@@ -2653,6 +2653,15 @@ static uint32_t stock_voff_for(const char *code) {
     return 0;
 }
 
+/* 电池类型: 0=纯碳(石墨) 最低 3200mV, 1=硅碳 最低 2800mV, 2=硅碳新代 最低 2450mV */
+static int batt_kind_for(const char *code) {
+    if (!strcmp(code, "ace2pro") || !strcmp(code, "op11") ||
+        !strcmp(code, "op12") || !strcmp(code, "ace3")) return 0;
+    if (!strcmp(code, "ace6") || !strcmp(code, "ace6t") ||
+        !strcmp(code, "op15") || !strcmp(code, "op15t")) return 2;
+    return 1;
+}
+
 static void cmd_identify(const char *img_path, const char *dtc, const char *workdir) {
     size_t n; uint8_t *b = read_file(img_path, &n);
     DtboImg img; dtbo_parse(&img, b, n);
@@ -2788,6 +2797,8 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     int oc_capable = strcmp(code, "op11") != 0;
     uint32_t stock_max = strip_above_for(code);
     uint32_t stock_voff = stock_voff_for(code);
+    int bkind = batt_kind_for(code);
+    uint32_t vmin = bkind == 0 ? 3200u : (bkind == 2 ? 2450u : 2800u);
     int mod_hz = (stock_max && max_rate > stock_max);
     int mod_voff = (stock_voff && batt_voff_dts && batt_voff_dts != stock_voff);
     int modified = (mod_hz || mod_voff) ? 1 : 0;
@@ -2795,14 +2806,18 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     printf("NAME=%s\n", name);
     printf("MAX_RATE=%u\n", max_rate);
     printf("BATT_MOD_CAPABLE=%d\n", batt_mod);
-    printf("BATT_VOFF_DTS=%u\n", stock_voff ? stock_voff : batt_voff_dts);
+    printf("BATT_VOFF_DTS=%u\n", batt_voff_dts);
+    printf("BATT_VOFF_STOCK=%u\n", stock_voff ? stock_voff : batt_voff_dts);
+    printf("BATT_KIND=%d\n", bkind);
+    printf("BATT_VMIN=%u\n", vmin);
     printf("OC_CAPABLE=%d\n", oc_capable);
     printf("STRIP_ABOVE=%u\n", stock_max);
     printf("MODIFIED=%d\n", modified);
-    fprintf(stderr, "[识别] %s (%s) 原厂最高档 %uHz%s%s, 超频: %s, 充电相关: 限流/解容(全机型)%s, 原厂关机电压 %umV%s\n",
+    fprintf(stderr, "[识别] %s (%s) 原厂最高档 %uHz%s%s, 超频: %s, 充电相关: 限流/解容(全机型)%s, 原厂关机电压 %umV, 电池: %s (最低 %umV)%s\n",
         name, code, max_rate, codename[0] ? " codename=" : "", codename[0] ? codename : "",
         oc_capable ? "支持" : "不支持(一加11)", batt_mod ? "/6100mAh魔改" : "",
         stock_voff ? stock_voff : batt_voff_dts,
+        bkind == 0 ? "纯碳" : "硅碳", vmin,
         modified ? ", 已修改 (档位/关机电压与原厂不一致)" : "");
     free(b); free(img.e);
 }

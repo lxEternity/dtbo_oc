@@ -430,7 +430,11 @@ if [ -f "$STOCK" ]; then
     MAXRATE=$(echo "$IDINFO" | grep '^MAX_RATE=' | cut -d= -f2)
     BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
     OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
-    BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
+    BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_STOCK=' | cut -d= -f2)
+    BATT_VOFF_RAW=$(echo "$IDINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
+    BATT_KIND=$(echo "$IDINFO" | grep '^BATT_KIND=' | cut -d= -f2)
+    BATT_VMIN=$(echo "$IDINFO" | grep '^BATT_VMIN=' | cut -d= -f2)
+    STOCK_RATE=$(echo "$IDINFO" | grep '^MAX_RATE=' | cut -d= -f2)
 fi
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
@@ -501,10 +505,15 @@ case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
-[ "$BATT_VOFF" -lt 2650 ] && BATT_VOFF=2650
-[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
+[ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
+[ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
 [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ] && BATT_MOD=0
 [ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
+[ -z "$BATT_VOFF_RAW" ] && BATT_VOFF_RAW=0
+[ -z "$BATT_KIND" ] && BATT_KIND=1
+[ -z "$BATT_VMIN" ] && BATT_VMIN=2800
+BATT_KIND_NAME="硅碳"; [ "$BATT_KIND" = "0" ] && BATT_KIND_NAME="纯碳"
+BATT_TYPE_NODE=$(cat /sys/class/oplus_chg/battery/battery_type 2>/dev/null)
 
 KO_FILE=""
 KO_AVAIL=0
@@ -555,6 +564,10 @@ if [ -n "$DTBO" ]; then
     rm -rf "$WORK"/ide* 2>/dev/null
     MODINFO=$("$TOOL" identify --img "$WORK/web_cur.img" --dtc "$DTC" --workdir "$WORK" 2>/dev/null)
     [ "$(echo "$MODINFO" | grep '^MODIFIED=' | cut -d= -f2)" = "1" ] && DTBO_PATCHED=1
+    CUR_RATE=$(echo "$MODINFO" | grep '^MAX_RATE=' | cut -d= -f2)
+    CUR_VOFF=$(echo "$MODINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
+    [ -n "$STOCK_RATE" ] && [ -n "$CUR_RATE" ] && [ "$CUR_RATE" != "$STOCK_RATE" ] && DTBO_PATCHED=1
+    [ -n "$BATT_VOFF_RAW" ] && [ "$BATT_VOFF_RAW" != "0" ] && [ -n "$CUR_VOFF" ] && [ "$CUR_VOFF" != "$BATT_VOFF_RAW" ] && DTBO_PATCHED=1
 fi
 
 LIC_STATE="none"; LIC_QQ=""; LIC_EXP=""
@@ -717,8 +730,12 @@ emit_status() {
     printf '%s' "$DEVNAME" | json_string
     printf ',"maxrate":"%s","choices":[%s],"plans":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$PLANS_JSON" "$OC_OK" "$BATT_OK"
     printf '"hz":%s,"oc_mode":"%s","ltpo_off":%s,' "$HZ" "$OC_MODE" "$LTPO_OFF"
-    printf '"batt":{"limit":%s,"uncap":%s,"voff":%s,"mod":%s,"voff_dts":%s},' \
+    printf '"batt":{"limit":%s,"uncap":%s,"voff":%s,"mod":%s,"voff_dts":%s,"kind":' \
         "$BATT_LIMIT" "$BATT_UNCAP" "$BATT_VOFF" "$BATT_MOD" "$BATT_VOFF_DTS"
+    printf '%s' "$BATT_KIND_NAME" | json_string
+    printf ',"vmin":%s,"btype":' "$BATT_VMIN"
+    printf '%s' "$BATT_TYPE_NODE" | json_string
+    printf '},'
     printf '"oc_active":%s,' "$OC_ACTIVE"
     printf '"rm_ready":%s,' "$([ -s "$DATA_DIR/rates.conf" ] && echo 1 || echo 0)"
     printf '"ko":{"available":%s,"builtin":%s,"loaded":%s,"installed":%s,"vermatch":%s,"file":' "$KO_AVAIL" "$KO_BUILTIN" "$KO_LOADED" "$KO_INSTALLED" "${KO_VERMATCH:-null}"
@@ -807,7 +824,7 @@ case "${1:-}" in
                     ;;
                 batt_voff)
                     case "$V" in ''|*[!0-9]*) fail "关机电压无效" ;; esac
-                    [ "$V" -ge 2650 ] && [ "$V" -le 3150 ] || fail "关机电压范围 2650-3150mV"
+                    [ "$V" -ge 2450 ] && [ "$V" -le 2800 ] || fail "关机电压范围 2450-2800mV"
                     BATT_VOFF="$V"
                     ;;
                 batt_mod)

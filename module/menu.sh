@@ -26,10 +26,15 @@ DEVICE=$(echo "$IDINFO" | grep '^DEVICE=' | cut -d= -f2)
 DEVNAME=$(echo "$IDINFO" | grep '^NAME=' | cut -d= -f2)
 BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
 OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
-BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
+BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_STOCK=' | cut -d= -f2)
+BATT_KIND=$(echo "$IDINFO" | grep '^BATT_KIND=' | cut -d= -f2)
+BATT_VMIN=$(echo "$IDINFO" | grep '^BATT_VMIN=' | cut -d= -f2)
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
 [ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
+[ -z "$BATT_KIND" ] && BATT_KIND=1
+[ -z "$BATT_VMIN" ] && BATT_VMIN=2800
+BATT_KIND_NAME="硅碳"; [ "$BATT_KIND" = "0" ] && BATT_KIND_NAME="纯碳"
 CHOICES=""
 case "$DEVICE" in
     ace2pro)   CHOICES="144 165 185" ;;
@@ -64,7 +69,7 @@ if [ -n "$BATTERY" ]; then
         3) BATT_MOD=1 ;;
         4) BATT_MOD=1; BATT_LIMIT=1 ;;
         5) BATT_UNCAP=1; BATT_VOFF=2800 ;;
-        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2850 ;;
+        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2800 ;;
     esac
     sed -i '/^BATTERY=/d' "$CONFIG" 2>/dev/null
     { echo "BATT_LIMIT=${BATT_LIMIT:-0}"; echo "BATT_UNCAP=${BATT_UNCAP:-0}"
@@ -85,8 +90,8 @@ case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
-[ "$BATT_VOFF" -lt 2650 ] && BATT_VOFF=2650
-[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
+[ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
+[ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
 [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ] && BATT_MOD=0
 
 KO_AVAIL=0
@@ -269,7 +274,7 @@ if [ "$OC_MODE" = "ko" ]; then
     echo " KO 方案不修改 DTBO, 充电相关功能不可用 (已全部关闭)"
 else
     echo ""
-    echo " 充电相关 (独立开关, 可任意组合; 原厂关机电压: $([ "$BATT_VOFF_DTS" != "0" ] && echo "${BATT_VOFF_DTS}mV" || echo "未识别"))"
+    echo " 充电相关 (独立开关, 可任意组合; 原厂关机电压: $([ "$BATT_VOFF_DTS" != "0" ] && echo "${BATT_VOFF_DTS}mV" || echo "未识别") / 电池类型: ${BATT_KIND_NAME})"
 
     L_INIT=0; [ "$BATT_LIMIT" = "1" ] && L_INIT=1
     choose "解除充电限流 (删限流节点/策略表电流拉满8000mA):" "关闭|开启" "$L_INIT"
@@ -279,18 +284,19 @@ else
     choose "电池解容 (自定义关机电压, 释放底部隐藏电量):" "关闭|开启" "$U_INIT"
     BATT_UNCAP=$([ "$SEL" = "1" ] && echo 1 || echo 0)
     if [ "$BATT_UNCAP" = "1" ]; then
-        VOPTS=""; VINIT=3; i=0; v=2650
-        while [ "$v" -le 3150 ]; do
+        VOPTS=""; VINIT=7; i=0; v=2450
+        while [ "$v" -le 2800 ]; do
             VOPTS="${VOPTS:+$VOPTS|}${v}mV"
             [ "$BATT_VOFF" = "$v" ] && VINIT=$i
             i=$((i+1)); v=$((v+50))
         done
         choose "关机电压 (1%电量=关机+50mV, 充电中欠压=关机-100mV):" "$VOPTS" "$VINIT"
-        BATT_VOFF=2800; i=0; v=2650
-        while [ "$v" -le 3150 ]; do
+        BATT_VOFF=2800; i=0; v=2450
+        while [ "$v" -le 2800 ]; do
             [ "$i" = "$SEL" ] && BATT_VOFF=$v
             i=$((i+1)); v=$((v+50))
         done
+        echo " 本机为${BATT_KIND_NAME}电池, 最低关机电压 ${BATT_VMIN}mV, 低于 ${BATT_VMIN} 可能会无效"
     fi
 
     if [ "$BATT_OK" = "1" ]; then

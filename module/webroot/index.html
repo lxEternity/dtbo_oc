@@ -151,8 +151,9 @@
             <label class="avb-toggle" for="chg-limit"><span>解除充电限流<small class="chg-note">删除 DTBO 限流节点 / 策略表充电电流拉满 8000mA</small></span><input id="chg-limit" type="checkbox" role="switch"></label>
             <label class="avb-toggle" for="chg-uncap"><span>电池解容<small class="chg-note">自定义关机电压, 释放底部隐藏电量, 显示真实电量</small></span><input id="chg-uncap" type="checkbox" role="switch"></label>
             <div class="chg-param" id="chg-voff-box" hidden>
-              <label class="avb-toggle" for="chg-voff"><span>关机电压 <b id="chg-voff-v">2800</b> mV</span><input id="chg-voff" type="range" min="2650" max="3150" step="50"></label>
-              <p class="chg-hint">1% 电量电压 = 关机 +50mV (<b id="chg-voff-p1">2850</b>mV) · 充电中欠压阈值 = 关机 -100mV · 可调范围 2650-3150mV</p>
+              <label class="avb-toggle" for="chg-voff"><span>关机电压 <b id="chg-voff-v">2800</b> mV</span><input id="chg-voff" type="range" min="2450" max="2800" step="50"></label>
+              <p class="chg-hint">1% 电量电压 = 关机 +50mV (<b id="chg-voff-p1">2850</b>mV) · 充电中欠压阈值 = 关机 -100mV · 可调范围 2450-2800mV</p>
+              <p class="chg-hint">本机为<b id="chg-batt-kind">硅碳</b>电池, 最低关机电压 <b id="chg-batt-vmin">2800</b>mV, 低于该值可能会无效</p>
             </div>
             <label class="avb-toggle" for="chg-mod" id="chg-mod-row" hidden><span>魔改电池 (6100mAh)<small class="chg-note">容量固定 6100mAh, 仅已更换魔改电芯时开启</small></span><input id="chg-mod" type="checkbox" role="switch"></label>
           </div>

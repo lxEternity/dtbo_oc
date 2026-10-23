@@ -77,7 +77,7 @@ if grep -q '^BATTERY=' "$CONFIG" 2>/dev/null; then
         3) BATT_MOD=1 ;;
         4) BATT_MOD=1; BATT_LIMIT=1 ;;
         5) BATT_UNCAP=1; BATT_VOFF=2800 ;;
-        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2850 ;;
+        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2800 ;;
     esac
     sed -i '/^BATTERY=/d' "$CONFIG"
     { echo "BATT_LIMIT=${BATT_LIMIT:-0}"; echo "BATT_UNCAP=${BATT_UNCAP:-0}"
@@ -271,8 +271,8 @@ case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
-[ "$BATT_VOFF" -lt 2650 ] && BATT_VOFF=2650
-[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
+[ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
+[ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
 if [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ]; then
     log "[提示] 魔改电池仅 ACE2Pro/一加11/一加12 支持, 已重置为关闭"
     BATT_MOD=0

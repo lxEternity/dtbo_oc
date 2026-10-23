@@ -712,9 +712,12 @@ function chgLoad(b) {
   chg = {
     limit: Number(nb.limit) ? 1 : 0,
     uncap: Number(nb.uncap) ? 1 : 0,
-    voff: clamp(Number(nb.voff), 2650, 3150, 2800),
+    voff: clamp(Number(nb.voff), 2450, 2800, 2800),
     mod: Number(nb.mod) ? 1 : 0,
     voffDts: Number(nb.voff_dts) || 0,
+    kind: nb.kind || '硅碳',
+    vmin: Number(nb.vmin) || 2800,
+    btype: nb.btype || '',
     capable: !!state?.batt_capable,
   };
   chgDirty = false;
@@ -736,6 +739,8 @@ function chgDraw() {
   $('chg-voff').value = String(chg.voff);
   $('chg-voff-v').textContent = String(chg.voff);
   $('chg-voff-p1').textContent = String(chg.voff + 50);
+  $('chg-batt-kind').textContent = chg.btype ? `${chg.kind} (${chg.btype})` : chg.kind;
+  $('chg-batt-vmin').textContent = String(chg.vmin);
   const on = [];
   if (chg.limit) on.push('解除限流');
   if (chg.uncap) on.push(`解容 ${chg.voff}mV`);
@@ -745,7 +750,7 @@ function chgDraw() {
   $('chg-entry-cap').textContent = koMode ? 'KO 挂载方式下不可用' : capText;
   $('chg-sub').textContent = koMode
     ? '当前为 KO 挂载方式, 充电相关功能不可用'
-    : `原厂关机电压 ${chg.voffDts ? `${chg.voffDts}mV` : '未识别'}`;
+    : `原厂关机电压 ${chg.voffDts ? `${chg.voffDts}mV` : '未识别'} · 电池类型 ${chg.btype ? `${chg.kind} (${chg.btype})` : chg.kind}`;
   $('chg-save').disabled = dis || koMode;
   $('chg-save-label').textContent = chgBusy ? '正在处理…' : (!lic && anyOn ? '需先完成身份验证' : '保存并应用');
 }
