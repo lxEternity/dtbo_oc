@@ -550,9 +550,11 @@ if [ -n "$KO_MN" ] && [ -d "/sys/module/$KO_MN" ]; then
 fi
 
 DTBO_PATCHED=0
-if [ -n "$DTBO" ] && [ -f "$STOCK" ]; then
+if [ -n "$DTBO" ]; then
     dd if="$DTBO" of="$WORK/web_cur.img" 2>/dev/null
-    cmp -s "$WORK/web_cur.img" "$STOCK" || DTBO_PATCHED=1
+    rm -rf "$WORK"/ide* 2>/dev/null
+    MODINFO=$("$TOOL" identify --img "$WORK/web_cur.img" --dtc "$DTC" --workdir "$WORK" 2>/dev/null)
+    [ "$(echo "$MODINFO" | grep '^MODIFIED=' | cut -d= -f2)" = "1" ] && DTBO_PATCHED=1
 fi
 
 LIC_STATE="none"; LIC_QQ=""; LIC_EXP=""

@@ -187,6 +187,10 @@ if [ ! -f "$STOCK" ]; then
         cp /sdcard/dtbo_backup.img "$STOCK"
         log "已从 /sdcard/dtbo_backup.img 恢复原始镜像基准"
     else
+        MODCHK=$("$TOOL" identify --img "$CUR" --dtc "$DTC" --workdir "$WORK/curid" 2>/dev/null)
+        if [ "$(echo "$MODCHK" | grep '^MODIFIED=' | cut -d= -f2)" = "1" ]; then
+            log "[警告] 当前 DTBO 已被修改 (档位/关机电压与原厂不一致), 以当前状态作为基准"
+        fi
         cp "$CUR" "$STOCK"
         log "首次运行: 当前分区已保存为原始镜像基准"
     fi

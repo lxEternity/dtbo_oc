@@ -2648,6 +2648,11 @@ static const char *model_codename(const char *model) {
 
 static uint32_t strip_above_for(const char *code);
 
+static uint32_t stock_voff_for(const char *code) {
+    if (!strcmp(code, "op13")) return 3100;
+    return 0;
+}
+
 static void cmd_identify(const char *img_path, const char *dtc, const char *workdir) {
     size_t n; uint8_t *b = read_file(img_path, &n);
     DtboImg img; dtbo_parse(&img, b, n);
@@ -2781,16 +2786,24 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     if (max_rate == 0) max_rate = max_rate_dyn;
     /* 一加11 仅电池/充电方案 */
     int oc_capable = strcmp(code, "op11") != 0;
+    uint32_t stock_max = strip_above_for(code);
+    uint32_t stock_voff = stock_voff_for(code);
+    int mod_hz = (stock_max && max_rate > stock_max);
+    int mod_voff = (stock_voff && batt_voff_dts && batt_voff_dts != stock_voff);
+    int modified = (mod_hz || mod_voff) ? 1 : 0;
     printf("DEVICE=%s\n", code);
     printf("NAME=%s\n", name);
     printf("MAX_RATE=%u\n", max_rate);
     printf("BATT_MOD_CAPABLE=%d\n", batt_mod);
-    printf("BATT_VOFF_DTS=%u\n", batt_voff_dts);
+    printf("BATT_VOFF_DTS=%u\n", stock_voff ? stock_voff : batt_voff_dts);
     printf("OC_CAPABLE=%d\n", oc_capable);
-    printf("STRIP_ABOVE=%u\n", strip_above_for(code));
-    fprintf(stderr, "[识别] %s (%s) 原厂最高档 %uHz%s%s, 超频: %s, 充电相关: 限流/解容(全机型)%s, 原厂关机电压 %umV\n",
+    printf("STRIP_ABOVE=%u\n", stock_max);
+    printf("MODIFIED=%d\n", modified);
+    fprintf(stderr, "[识别] %s (%s) 原厂最高档 %uHz%s%s, 超频: %s, 充电相关: 限流/解容(全机型)%s, 原厂关机电压 %umV%s\n",
         name, code, max_rate, codename[0] ? " codename=" : "", codename[0] ? codename : "",
-        oc_capable ? "支持" : "不支持(一加11)", batt_mod ? "/6100mAh魔改" : "", batt_voff_dts);
+        oc_capable ? "支持" : "不支持(一加11)", batt_mod ? "/6100mAh魔改" : "",
+        stock_voff ? stock_voff : batt_voff_dts,
+        modified ? ", 已修改 (档位/关机电压与原厂不一致)" : "");
     free(b); free(img.e);
 }
 
