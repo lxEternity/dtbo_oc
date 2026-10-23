@@ -27,11 +27,9 @@ DEVNAME=$(echo "$IDINFO" | grep '^NAME=' | cut -d= -f2)
 BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
 OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
 BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
-BATT_FULL_DTS=$(echo "$IDINFO" | grep '^BATT_FULL_DTS=' | cut -d= -f2)
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
 [ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
-[ -z "$BATT_FULL_DTS" ] && BATT_FULL_DTS=0
 CHOICES=""
 case "$DEVICE" in
     ace2pro)   CHOICES="144 165 185" ;;
@@ -56,7 +54,7 @@ case "$DEVICE" in
 esac
 
 HZ_CHOICE=""; OC_MODE=""; LTPO_OFF=""
-BATT_LIMIT=""; BATT_UNCAP=""; BATT_MOD=""; BATT_FULL_ON=""; BATT_VOFF=""; BATT_FULL=""
+BATT_LIMIT=""; BATT_UNCAP=""; BATT_MOD=""; BATT_VOFF=""
 [ -f "$CONFIG" ] && . "$CONFIG"
 
 if [ -n "$BATTERY" ]; then
@@ -66,12 +64,11 @@ if [ -n "$BATTERY" ]; then
         3) BATT_MOD=1 ;;
         4) BATT_MOD=1; BATT_LIMIT=1 ;;
         5) BATT_UNCAP=1; BATT_VOFF=2800 ;;
-        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2850; BATT_FULL_ON=1; BATT_FULL=4550 ;;
+        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2850 ;;
     esac
     sed -i '/^BATTERY=/d' "$CONFIG" 2>/dev/null
     { echo "BATT_LIMIT=${BATT_LIMIT:-0}"; echo "BATT_UNCAP=${BATT_UNCAP:-0}"
-      echo "BATT_VOFF=${BATT_VOFF:-3000}"; echo "BATT_MOD=${BATT_MOD:-0}"
-      echo "BATT_FULL_ON=${BATT_FULL_ON:-0}"; echo "BATT_FULL=${BATT_FULL:-0}"; } >> "$CONFIG"
+      echo "BATT_VOFF=${BATT_VOFF:-2800}"; echo "BATT_MOD=${BATT_MOD:-0}"; } >> "$CONFIG"
    
     BATTERY=""
 fi
@@ -83,21 +80,14 @@ case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
 [ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
 [ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
 [ -z "$BATT_MOD" ] && BATT_MOD=0
-[ -z "$BATT_FULL_ON" ] && BATT_FULL_ON=0
-[ -z "$BATT_VOFF" ] && BATT_VOFF=3000
-[ -z "$BATT_FULL" ] && BATT_FULL=0
+[ -z "$BATT_VOFF" ] && BATT_VOFF=2800
 case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
-case "$BATT_FULL_ON" in 0|1) ;; *) BATT_FULL_ON=0 ;; esac
-case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=3000 ;; esac
-[ "$BATT_VOFF" -lt 2700 ] && BATT_VOFF=2700
-[ "$BATT_VOFF" -gt 3350 ] && BATT_VOFF=3350
-case "$BATT_FULL" in ''|*[!0-9]*) BATT_FULL=0 ;; esac
-[ "$BATT_FULL" -gt 0 ] && [ "$BATT_FULL" -lt 4300 ] && BATT_FULL=4300
-[ "$BATT_FULL" -gt 4570 ] && BATT_FULL=4570
+case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
+[ "$BATT_VOFF" -lt 2650 ] && BATT_VOFF=2650
+[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
 [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ] && BATT_MOD=0
-[ "$BATT_FULL_ON" = "1" ] && [ "$BATT_FULL" = "0" ] && { [ "$BATT_FULL_DTS" -ge 4300 ] && [ "$BATT_FULL_DTS" -le 4570 ] && BATT_FULL=$BATT_FULL_DTS || BATT_FULL_ON=0; }
 
 KO_AVAIL=0
 for p in "$DATA_DIR/ko/$DEVICE.ko" "$MODDIR/ko/$DEVICE.ko"; do
@@ -275,11 +265,11 @@ else
 fi
 
 if [ "$OC_MODE" = "ko" ]; then
-    BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_FULL_ON=0
+    BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0
     echo " KO 方案不修改 DTBO, 充电相关功能不可用 (已全部关闭)"
 else
     echo ""
-    echo " 充电相关 (独立开关, 可任意组合; DTBO 基准: 关机 $([ "$BATT_VOFF_DTS" != "0" ] && echo "${BATT_VOFF_DTS}mV" || echo "未识别") / 满充 $([ "$BATT_FULL_DTS" != "0" ] && echo "${BATT_FULL_DTS}mV" || echo "未识别"))"
+    echo " 充电相关 (独立开关, 可任意组合; 原厂关机电压: $([ "$BATT_VOFF_DTS" != "0" ] && echo "${BATT_VOFF_DTS}mV" || echo "未识别"))"
 
     L_INIT=0; [ "$BATT_LIMIT" = "1" ] && L_INIT=1
     choose "解除充电限流 (删限流节点/策略表电流拉满8000mA):" "关闭|开启" "$L_INIT"
@@ -289,15 +279,15 @@ else
     choose "电池解容 (自定义关机电压, 释放底部隐藏电量):" "关闭|开启" "$U_INIT"
     BATT_UNCAP=$([ "$SEL" = "1" ] && echo 1 || echo 0)
     if [ "$BATT_UNCAP" = "1" ]; then
-        VOPTS=""; VINIT=6; i=0; v=2700
-        while [ "$v" -le 3350 ]; do
+        VOPTS=""; VINIT=3; i=0; v=2650
+        while [ "$v" -le 3150 ]; do
             VOPTS="${VOPTS:+$VOPTS|}${v}mV"
             [ "$BATT_VOFF" = "$v" ] && VINIT=$i
             i=$((i+1)); v=$((v+50))
         done
         choose "关机电压 (1%电量=关机+50mV, 充电中欠压=关机-100mV):" "$VOPTS" "$VINIT"
-        BATT_VOFF=3000; i=0; v=2700
-        while [ "$v" -le 3350 ]; do
+        BATT_VOFF=2800; i=0; v=2650
+        while [ "$v" -le 3150 ]; do
             [ "$i" = "$SEL" ] && BATT_VOFF=$v
             i=$((i+1)); v=$((v+50))
         done
@@ -315,33 +305,6 @@ else
         BATT_MOD=0
     fi
 
-    if [ "$BATT_FULL_DTS" -ge 4300 ] && [ "$BATT_FULL_DTS" -le 4570 ]; then
-        FULL_DFT_NOTE=" (DTBO 基准 ${BATT_FULL_DTS}mV)"
-    else
-        FULL_DFT_NOTE=""
-    fi
-    F_INIT=0; [ "$BATT_FULL_ON" = "1" ] && F_INIT=1
-    choose "自定义满充电压 (以 DTBO 基准满充整体偏移)${FULL_DFT_NOTE}:" "关闭 (保持 DTBO 默认)|开启" "$F_INIT"
-    BATT_FULL_ON=$([ "$SEL" = "1" ] && echo 1 || echo 0)
-    if [ "$BATT_FULL_ON" = "1" ]; then
-        FOPTS=""; FINIT=10; i=0; v=4300
-        [ "$BATT_FULL" -ge 4300 ] && [ "$BATT_FULL" -le 4570 ] || BATT_FULL=4400
-        while [ "$v" -le 4570 ]; do
-            MARK=""
-            [ "$v" = "$BATT_FULL_DTS" ] && MARK="(原厂)"
-            FOPTS="${FOPTS:+$FOPTS|}${v}mV${MARK}"
-            [ "$BATT_FULL" = "$v" ] && FINIT=$i
-            i=$((i+1)); v=$((v+10))
-        done
-        choose "满充电压 (4300-4570mV):" "$FOPTS" "$FINIT"
-        BATT_FULL=4400; i=0; v=4300
-        while [ "$v" -le 4570 ]; do
-            [ "$i" = "$SEL" ] && BATT_FULL=$v
-            i=$((i+1)); v=$((v+10))
-        done
-    else
-        BATT_FULL=0
-    fi
 fi
 
 LTPO_INIT=0
@@ -372,22 +335,19 @@ BATT_N=0
 if [ "$BATT_LIMIT" = "1" ]; then echo "  充电: 解除充电限流"; BATT_N=$((BATT_N+1)); fi
 if [ "$BATT_UNCAP" = "1" ]; then echo "  充电: 电池解容 (关机 ${BATT_VOFF}mV / 1% $((BATT_VOFF+50))mV / 充电中欠压 $((BATT_VOFF-100))mV)"; BATT_N=$((BATT_N+1)); fi
 if [ "$BATT_MOD" = "1" ]; then echo "  充电: 魔改电池 6100mAh"; BATT_N=$((BATT_N+1)); fi
-if [ "$BATT_FULL_ON" = "1" ]; then echo "  充电: 满充 ${BATT_FULL}mV (基准 $([ "$BATT_FULL_DTS" != "0" ] && echo "${BATT_FULL_DTS}mV" || echo "未识别") 偏移 $([ "$BATT_FULL_DTS" != "0" ] && echo "$((BATT_FULL-BATT_FULL_DTS))mV" || echo "-"))"; BATT_N=$((BATT_N+1)); fi
 [ "$BATT_N" = "0" ] && echo "  充电: 相关功能全部关闭 (原版)"
 echo "=============================================="
 choose "应用方式:" "稍后 (下次开机自动处理)|立即刷入 (重启后生效)" 0
 APPLY=$SEL
 
 if [ -f "$CONFIG" ]; then
-    sed -i "s/^HZ_CHOICE=.*/HZ_CHOICE=$HZ_CHOICE/;s/^BATT_LIMIT=.*/BATT_LIMIT=$BATT_LIMIT/;s/^BATT_UNCAP=.*/BATT_UNCAP=$BATT_UNCAP/;s/^BATT_VOFF=.*/BATT_VOFF=$BATT_VOFF/;s/^BATT_MOD=.*/BATT_MOD=$BATT_MOD/;s/^BATT_FULL_ON=.*/BATT_FULL_ON=$BATT_FULL_ON/;s/^BATT_FULL=.*/BATT_FULL=$BATT_FULL/;s/^OC_MODE=.*/OC_MODE=$OC_MODE/;s/^LTPO_OFF=.*/LTPO_OFF=$LTPO_OFF/" "$CONFIG" 2>/dev/null || {
+    sed -i "s/^HZ_CHOICE=.*/HZ_CHOICE=$HZ_CHOICE/;s/^BATT_LIMIT=.*/BATT_LIMIT=$BATT_LIMIT/;s/^BATT_UNCAP=.*/BATT_UNCAP=$BATT_UNCAP/;s/^BATT_VOFF=.*/BATT_VOFF=$BATT_VOFF/;s/^BATT_MOD=.*/BATT_MOD=$BATT_MOD/;s/^OC_MODE=.*/OC_MODE=$OC_MODE/;s/^LTPO_OFF=.*/LTPO_OFF=$LTPO_OFF/" "$CONFIG" 2>/dev/null || {
         cat > "$CONFIG" <<EOF
 HZ_CHOICE=$HZ_CHOICE
 BATT_LIMIT=$BATT_LIMIT
 BATT_UNCAP=$BATT_UNCAP
 BATT_VOFF=$BATT_VOFF
 BATT_MOD=$BATT_MOD
-BATT_FULL_ON=$BATT_FULL_ON
-BATT_FULL=$BATT_FULL
 OC_MODE=$OC_MODE
 LTPO_OFF=$LTPO_OFF
 EOF
@@ -399,8 +359,6 @@ BATT_LIMIT=$BATT_LIMIT
 BATT_UNCAP=$BATT_UNCAP
 BATT_VOFF=$BATT_VOFF
 BATT_MOD=$BATT_MOD
-BATT_FULL_ON=$BATT_FULL_ON
-BATT_FULL=$BATT_FULL
 OC_MODE=$OC_MODE
 LTPO_OFF=$LTPO_OFF
 FLASH=1
@@ -432,7 +390,7 @@ if command -v resetprop >/dev/null 2>&1; then
 fi
 
 echo ""
-echo "配置已保存: HZ_CHOICE=$HZ_CHOICE 充电相关[限流=$BATT_LIMIT 解容=$BATT_UNCAP(${BATT_VOFF}mV) 魔改=$BATT_MOD 满充=$BATT_FULL_ON($([ "$BATT_FULL_ON" = "1" ] && echo "${BATT_FULL}mV" || echo "-"))] OC_MODE=$OC_MODE LTPO_OFF=$LTPO_OFF"
+echo "配置已保存: HZ_CHOICE=$HZ_CHOICE 充电相关[限流=$BATT_LIMIT 解容=$BATT_UNCAP(${BATT_VOFF}mV) 魔改=$BATT_MOD] OC_MODE=$OC_MODE LTPO_OFF=$LTPO_OFF"
 echo ""
 if [ "$APPLY" = "1" ]; then
     echo "正在执行 service.sh ..."

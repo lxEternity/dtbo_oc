@@ -422,7 +422,6 @@ CHOICES=""
 BATT_OK=0
 OC_OK=1
 BATT_VOFF_DTS=""
-BATT_FULL_DTS=""
 if [ -f "$STOCK" ]; then
     rm -rf "$WORK"/ide* 2>/dev/null
     IDINFO=$("$TOOL" identify --img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>/dev/null)
@@ -432,7 +431,6 @@ if [ -f "$STOCK" ]; then
     BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
     OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
     BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
-    BATT_FULL_DTS=$(echo "$IDINFO" | grep '^BATT_FULL_DTS=' | cut -d= -f2)
 fi
 [ -z "$BATT_OK" ] && BATT_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
@@ -484,7 +482,7 @@ HZ=""
 OC_MODE=""
 LTPO_OFF=""
 FLASH=""
-BATT_LIMIT=""; BATT_UNCAP=""; BATT_MOD=""; BATT_FULL_ON=""; BATT_VOFF=""; BATT_FULL=""
+BATT_LIMIT=""; BATT_UNCAP=""; BATT_MOD=""; BATT_VOFF=""
 if [ -f "$CONFIG" ]; then
     . "$CONFIG"
 fi
@@ -498,23 +496,15 @@ case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
 [ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
 [ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
 [ -z "$BATT_MOD" ] && BATT_MOD=0
-[ -z "$BATT_FULL_ON" ] && BATT_FULL_ON=0
-[ -z "$BATT_VOFF" ] && BATT_VOFF=3000
-[ -z "$BATT_FULL" ] && BATT_FULL=0
+[ -z "$BATT_VOFF" ] && BATT_VOFF=2800
 case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
-case "$BATT_FULL_ON" in 0|1) ;; *) BATT_FULL_ON=0 ;; esac
-case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=3000 ;; esac
-[ "$BATT_VOFF" -lt 2700 ] && BATT_VOFF=2700
-[ "$BATT_VOFF" -gt 3350 ] && BATT_VOFF=3350
-case "$BATT_FULL" in ''|*[!0-9]*) BATT_FULL=0 ;; esac
-[ "$BATT_FULL" -gt 0 ] && [ "$BATT_FULL" -lt 4300 ] && BATT_FULL=4300
-[ "$BATT_FULL" -gt 4570 ] && BATT_FULL=4570
+case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
+[ "$BATT_VOFF" -lt 2650 ] && BATT_VOFF=2650
+[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
 [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ] && BATT_MOD=0
-[ "$BATT_FULL_ON" = "1" ] && [ "$BATT_FULL" = "0" ] && BATT_FULL_ON=0
 [ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
-[ -z "$BATT_FULL_DTS" ] && BATT_FULL_DTS=0
 
 KO_FILE=""
 KO_AVAIL=0
@@ -725,8 +715,8 @@ emit_status() {
     printf '%s' "$DEVNAME" | json_string
     printf ',"maxrate":"%s","choices":[%s],"plans":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$PLANS_JSON" "$OC_OK" "$BATT_OK"
     printf '"hz":%s,"oc_mode":"%s","ltpo_off":%s,' "$HZ" "$OC_MODE" "$LTPO_OFF"
-    printf '"batt":{"limit":%s,"uncap":%s,"voff":%s,"mod":%s,"full_on":%s,"full":%s,"voff_dts":%s,"full_dts":%s},' \
-        "$BATT_LIMIT" "$BATT_UNCAP" "$BATT_VOFF" "$BATT_MOD" "$BATT_FULL_ON" "$BATT_FULL" "$BATT_VOFF_DTS" "$BATT_FULL_DTS"
+    printf '"batt":{"limit":%s,"uncap":%s,"voff":%s,"mod":%s,"voff_dts":%s},' \
+        "$BATT_LIMIT" "$BATT_UNCAP" "$BATT_VOFF" "$BATT_MOD" "$BATT_VOFF_DTS"
     printf '"oc_active":%s,' "$OC_ACTIVE"
     printf '"rm_ready":%s,' "$([ -s "$DATA_DIR/rates.conf" ] && echo 1 || echo 0)"
     printf '"ko":{"available":%s,"builtin":%s,"loaded":%s,"installed":%s,"vermatch":%s,"file":' "$KO_AVAIL" "$KO_BUILTIN" "$KO_LOADED" "$KO_INSTALLED" "${KO_VERMATCH:-null}"
@@ -751,7 +741,6 @@ batt_active() {
     [ "$BATT_LIMIT" = "1" ] && return 0
     [ "$BATT_UNCAP" = "1" ] && return 0
     [ "$BATT_MOD" = "1" ] && return 0
-    [ "$BATT_FULL_ON" = "1" ] && return 0
     return 1
 }
 
@@ -816,25 +805,12 @@ case "${1:-}" in
                     ;;
                 batt_voff)
                     case "$V" in ''|*[!0-9]*) fail "关机电压无效" ;; esac
-                    [ "$V" -ge 2700 ] && [ "$V" -le 3350 ] || fail "关机电压范围 2700-3350mV"
+                    [ "$V" -ge 2650 ] && [ "$V" -le 3150 ] || fail "关机电压范围 2650-3150mV"
                     BATT_VOFF="$V"
                     ;;
                 batt_mod)
                     case "$V" in 0|1) BATT_MOD="$V" ;; *) fail "魔改电池参数无效" ;; esac
                     [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ] && fail "魔改电池仅 ACE2Pro/一加11/一加12 支持"
-                    ;;
-                batt_full_on)
-                    case "$V" in 0|1) BATT_FULL_ON="$V" ;; *) fail "满充开关参数无效" ;; esac
-                    ;;
-                batt_full)
-                    case "$V" in
-                        0) BATT_FULL=0 ;;
-                        *[!0-9]*) fail "满充电压无效" ;;
-                        *)
-                            [ "$V" -ge 4300 ] && [ "$V" -le 4570 ] || fail "满充电压范围 4300-4570mV"
-                            BATT_FULL="$V"
-                            ;;
-                    esac
                     ;;
                 oc_mode)
                     case "$V" in dtbo|ko) OC_MODE="$V" ;; *) fail "未知超频方案 $V" ;; esac
@@ -844,12 +820,11 @@ case "${1:-}" in
                     ;;
             esac
         done
-        [ "$BATT_FULL_ON" = "1" ] && [ "$BATT_FULL" = "0" ] && fail "已开启自定义满充但未设置电压"
         if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then
             MSG="${MSG}未找到 KO ($DEVICE.ko), 侧载到 /data/adb/dtbo_oc/ko/ 后重启生效; "
         fi
         if [ "$OC_MODE" = "ko" ] && batt_active; then
-            BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_FULL_ON=0
+            BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0
             MSG="KO 方案不修改 DTBO, 充电相关功能已全部关闭; "
         fi
         if [ ! -f "$CONFIG" ]; then
@@ -859,8 +834,6 @@ BATT_LIMIT=$BATT_LIMIT
 BATT_UNCAP=$BATT_UNCAP
 BATT_VOFF=$BATT_VOFF
 BATT_MOD=$BATT_MOD
-BATT_FULL_ON=$BATT_FULL_ON
-BATT_FULL=$BATT_FULL
 OC_MODE=$OC_MODE
 LTPO_OFF=$LTPO_OFF
 FLASH=1
@@ -873,8 +846,6 @@ EOF
             set_config_val BATT_UNCAP "$BATT_UNCAP"
             set_config_val BATT_VOFF "$BATT_VOFF"
             set_config_val BATT_MOD "$BATT_MOD"
-            set_config_val BATT_FULL_ON "$BATT_FULL_ON"
-            set_config_val BATT_FULL "$BATT_FULL"
             set_config_val OC_MODE "$OC_MODE"
             set_config_val LTPO_OFF "$LTPO_OFF"
         fi
@@ -936,7 +907,7 @@ EOF
             fi
         fi
         if [ -f "$CONFIG" ]; then
-            sed -i 's/^HZ_CHOICE=.*/HZ_CHOICE=0/;s/^BATT_LIMIT=.*/BATT_LIMIT=0/;s/^BATT_UNCAP=.*/BATT_UNCAP=0/;s/^BATT_MOD=.*/BATT_MOD=0/;s/^BATT_FULL_ON=.*/BATT_FULL_ON=0/;s/^BATT_FULL=.*/BATT_FULL=0/;s/^LTPO_OFF=.*/LTPO_OFF=0/' "$CONFIG"
+            sed -i 's/^HZ_CHOICE=.*/HZ_CHOICE=0/;s/^BATT_LIMIT=.*/BATT_LIMIT=0/;s/^BATT_UNCAP=.*/BATT_UNCAP=0/;s/^BATT_MOD=.*/BATT_MOD=0/;/^BATT_FULL_ON=/d;/^BATT_FULL=/d;s/^LTPO_OFF=.*/LTPO_OFF=0/' "$CONFIG"
         fi
         LTPO_OFF=0
         ltpo_apply 2>/dev/null

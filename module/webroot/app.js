@@ -694,7 +694,7 @@ $('app-picker').addEventListener('click', event => {
 });
 
 // ================= 充电相关子页面 (独立开关 · 全自定义参数) =================
-let chg = null;       // 编辑状态 {limit,uncap,voff,mod,full_on,full,voffDts,fullDts,capable}
+let chg = null;       // 编辑状态 {limit,uncap,voff,mod,voffDts,capable}
 let chgBusy = false;
 let chgDirty = false;
 
@@ -708,20 +708,15 @@ function chgNotify(message, isError = false) {
 
 function chgLoad(b) {
   const nb = b || {};
-  const fullDts = Number(nb.full_dts) || 0;
   const clamp = (v, lo, hi, dft) => (Number.isFinite(v) && v >= lo && v <= hi ? v : dft);
   chg = {
     limit: Number(nb.limit) ? 1 : 0,
     uncap: Number(nb.uncap) ? 1 : 0,
-    voff: clamp(Number(nb.voff), 2700, 3350, 3000),
+    voff: clamp(Number(nb.voff), 2650, 3150, 2800),
     mod: Number(nb.mod) ? 1 : 0,
-    full_on: Number(nb.full_on) ? 1 : 0,
-    full: clamp(Number(nb.full), 4300, 4570, 0),
     voffDts: Number(nb.voff_dts) || 0,
-    fullDts,
     capable: !!state?.batt_capable,
   };
-  if (!chg.full) chg.full = fullDts >= 4300 && fullDts <= 4570 ? fullDts : 4400;
   chgDirty = false;
   chgDraw();
 }
@@ -731,32 +726,26 @@ function chgDraw() {
   const koMode = state?.oc_mode === 'ko';
   const dis = chgBusy || !connected;
   const lic = state?.license?.state === 'ok';
-  const anyOn = chg.limit || chg.uncap || chg.mod || chg.full_on;
-  ['chg-limit', 'chg-uncap', 'chg-mod', 'chg-fullsw', 'chg-voff', 'chg-full', 'chg-off'].forEach(id => { $(id).disabled = dis; });
+  const anyOn = chg.limit || chg.uncap || chg.mod;
+  ['chg-limit', 'chg-uncap', 'chg-mod', 'chg-voff', 'chg-off'].forEach(id => { $(id).disabled = dis; });
   $('chg-limit').checked = !!chg.limit;
   $('chg-uncap').checked = !!chg.uncap;
   $('chg-mod').checked = !!chg.mod;
-  $('chg-fullsw').checked = !!chg.full_on;
   $('chg-mod-row').hidden = !chg.capable;
   $('chg-voff-box').hidden = !chg.uncap;
-  $('chg-full-box').hidden = !chg.full_on;
   $('chg-voff').value = String(chg.voff);
   $('chg-voff-v').textContent = String(chg.voff);
   $('chg-voff-p1').textContent = String(chg.voff + 50);
-  $('chg-full').value = String(chg.full);
-  $('chg-full-v').textContent = String(chg.full);
-  $('chg-full-dts').textContent = chg.fullDts ? String(chg.fullDts) : '未识别';
   const on = [];
   if (chg.limit) on.push('解除限流');
   if (chg.uncap) on.push(`解容 ${chg.voff}mV`);
   if (chg.mod) on.push('魔改 6100mAh');
-  if (chg.full_on) on.push(`满充 ${chg.full}mV`);
   const capText = on.length ? on.join(' · ') : '全部关闭';
   $('chg-sw-caption').textContent = chgDirty ? `${capText} · 待保存` : capText;
   $('chg-entry-cap').textContent = koMode ? 'KO 挂载方式下不可用' : capText;
   $('chg-sub').textContent = koMode
     ? '当前为 KO 挂载方式, 充电相关功能不可用'
-    : `基准关机 ${chg.voffDts ? `${chg.voffDts}mV` : '未识别'} · 基准满充 ${chg.fullDts ? `${chg.fullDts}mV` : '未识别'}`;
+    : `原厂关机电压 ${chg.voffDts ? `${chg.voffDts}mV` : '未识别'}`;
   $('chg-save').disabled = dis || koMode;
   $('chg-save-label').textContent = chgBusy ? '正在处理…' : (!lic && anyOn ? '需先完成身份验证' : '保存并应用');
 }
@@ -772,7 +761,7 @@ async function chgSave() {
     chgNotify('当前为 KO 挂载方式, 不修改 DTBO, 充电相关功能不可用。', true);
     return;
   }
-  const anyOn = chg.limit || chg.uncap || chg.mod || chg.full_on;
+  const anyOn = chg.limit || chg.uncap || chg.mod;
   if (anyOn && state.license?.state !== 'ok') {
     chgNotify('请先去群内向管理员提交ID完成身份验证, 再开启充电相关功能。', true);
     return;
@@ -781,7 +770,7 @@ async function chgSave() {
   chgDraw();
   chgNotify('正在保存充电相关配置并应用… (包含解包/打包/刷入, 请稍候)');
   try {
-    await command(`save batt_limit=${chg.limit} batt_uncap=${chg.uncap} batt_voff=${chg.voff} batt_mod=${chg.mod} batt_full_on=${chg.full_on} batt_full=${chg.full_on ? chg.full : 0}`);
+    await command(`save batt_limit=${chg.limit} batt_uncap=${chg.uncap} batt_voff=${chg.voff} batt_mod=${chg.mod}`);
     const result = await command('apply', 120000);
     chgDirty = false;
     chgNotify(result.message || '已应用, 重启后生效。');
@@ -798,21 +787,15 @@ async function chgSave() {
 $('chg-limit').addEventListener('change', () => { chg.limit = $('chg-limit').checked ? 1 : 0; chgMark(); });
 $('chg-uncap').addEventListener('change', () => { chg.uncap = $('chg-uncap').checked ? 1 : 0; chgMark(); });
 $('chg-mod').addEventListener('change', () => { chg.mod = $('chg-mod').checked ? 1 : 0; chgMark(); });
-$('chg-fullsw').addEventListener('change', () => { chg.full_on = $('chg-fullsw').checked ? 1 : 0; chgMark(); });
 $('chg-voff').addEventListener('input', () => {
-  chg.voff = Number($('chg-voff').value) || 3000;
+  chg.voff = Number($('chg-voff').value) || 2800;
   $('chg-voff-v').textContent = String(chg.voff);
   $('chg-voff-p1').textContent = String(chg.voff + 50);
 });
 $('chg-voff').addEventListener('change', chgMark);
-$('chg-full').addEventListener('input', () => {
-  chg.full = Number($('chg-full').value) || 4400;
-  $('chg-full-v').textContent = String(chg.full);
-});
-$('chg-full').addEventListener('change', chgMark);
 $('chg-off').addEventListener('click', () => {
   if (!chg) return;
-  chg.limit = 0; chg.uncap = 0; chg.mod = 0; chg.full_on = 0;
+  chg.limit = 0; chg.uncap = 0; chg.mod = 0;
   chgMark();
   chgNotify('已全部关闭 (尚未保存, 请点击「保存并应用」)。');
 });

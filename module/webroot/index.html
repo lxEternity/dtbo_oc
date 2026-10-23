@@ -66,7 +66,7 @@
 
     <button id="chg-entry" class="rm-entry" type="button">
       <span class="rme-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 2v10c-1.7.9-3 2.9-3 5a6 6 0 0 0 12 0c0-2.1-1.3-4.1-3-5V2Z"/><path d="M12 2v4M9.5 2v3M14.5 2v3"/></svg></span>
-      <span class="rme-text"><strong>充电相关</strong><small id="chg-entry-cap">限流 · 解容 · 满充 · 魔改电池</small></span>
+      <span class="rme-text"><strong>充电相关</strong><small id="chg-entry-cap">限流 · 解容 · 魔改电池</small></span>
       <span class="rme-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg></span>
     </button>
 
@@ -151,15 +151,10 @@
             <label class="avb-toggle" for="chg-limit"><span>解除充电限流<small class="chg-note">删除 DTBO 限流节点 / 策略表充电电流拉满 8000mA</small></span><input id="chg-limit" type="checkbox" role="switch"></label>
             <label class="avb-toggle" for="chg-uncap"><span>电池解容<small class="chg-note">自定义关机电压, 释放底部隐藏电量, 显示真实电量</small></span><input id="chg-uncap" type="checkbox" role="switch"></label>
             <div class="chg-param" id="chg-voff-box" hidden>
-              <label class="avb-toggle" for="chg-voff"><span>关机电压 <b id="chg-voff-v">3000</b> mV</span><input id="chg-voff" type="range" min="2700" max="3350" step="50"></label>
-              <p class="chg-hint">1% 电量电压 = 关机 +50mV (<b id="chg-voff-p1">3050</b>mV) · 充电中欠压阈值 = 关机 -100mV · 下限 2700mV</p>
+              <label class="avb-toggle" for="chg-voff"><span>关机电压 <b id="chg-voff-v">2800</b> mV</span><input id="chg-voff" type="range" min="2650" max="3150" step="50"></label>
+              <p class="chg-hint">1% 电量电压 = 关机 +50mV (<b id="chg-voff-p1">2850</b>mV) · 充电中欠压阈值 = 关机 -100mV · 可调范围 2650-3150mV</p>
             </div>
             <label class="avb-toggle" for="chg-mod" id="chg-mod-row" hidden><span>魔改电池 (6100mAh)<small class="chg-note">容量固定 6100mAh, 仅已更换魔改电芯时开启</small></span><input id="chg-mod" type="checkbox" role="switch"></label>
-            <label class="avb-toggle" for="chg-fullsw"><span>自定义满充电压<small class="chg-note">以 DTBO 基准满充整体偏移, 保持阶梯步进</small></span><input id="chg-fullsw" type="checkbox" role="switch"></label>
-            <div class="chg-param" id="chg-full-box" hidden>
-              <label class="avb-toggle" for="chg-full"><span>满充电压 <b id="chg-full-v">—</b> mV</span><input id="chg-full" type="range" min="4300" max="4570" step="10"></label>
-              <p class="chg-hint">DTBO 基准满充 <b id="chg-full-dts">—</b> mV · 可调范围 4300-4570mV</p>
-            </div>
           </div>
         </section>
 

@@ -57,10 +57,8 @@ if [ ! -f "$CONFIG" ]; then
 HZ_CHOICE=144
 BATT_LIMIT=0
 BATT_UNCAP=0
-BATT_VOFF=3000
+BATT_VOFF=2800
 BATT_MOD=0
-BATT_FULL_ON=0
-BATT_FULL=0
 OC_MODE=dtbo
 LTPO_OFF=0
 FLASH=1
@@ -79,12 +77,11 @@ if grep -q '^BATTERY=' "$CONFIG" 2>/dev/null; then
         3) BATT_MOD=1 ;;
         4) BATT_MOD=1; BATT_LIMIT=1 ;;
         5) BATT_UNCAP=1; BATT_VOFF=2800 ;;
-        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2850; BATT_FULL_ON=1; BATT_FULL=4550 ;;
+        6) BATT_LIMIT=1; BATT_UNCAP=1; BATT_VOFF=2850 ;;
     esac
     sed -i '/^BATTERY=/d' "$CONFIG"
     { echo "BATT_LIMIT=${BATT_LIMIT:-0}"; echo "BATT_UNCAP=${BATT_UNCAP:-0}"
-      echo "BATT_VOFF=${BATT_VOFF:-3000}"; echo "BATT_MOD=${BATT_MOD:-0}"
-      echo "BATT_FULL_ON=${BATT_FULL_ON:-0}"; echo "BATT_FULL=${BATT_FULL:-0}"; } >> "$CONFIG"
+      echo "BATT_VOFF=${BATT_VOFF:-2800}"; echo "BATT_MOD=${BATT_MOD:-0}"; } >> "$CONFIG"
     log "已迁移旧版电池方案 BATTERY=$_OB 到充电相关自定义参数"
 fi
 sed -i '/^AVB_OFF=/d' "$CONFIG" 2>/dev/null
@@ -264,34 +261,25 @@ fi
 [ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
 [ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
 [ -z "$BATT_MOD" ] && BATT_MOD=0
-[ -z "$BATT_FULL_ON" ] && BATT_FULL_ON=0
-[ -z "$BATT_VOFF" ] && BATT_VOFF=3000
-[ -z "$BATT_FULL" ] && BATT_FULL=0
+[ -z "$BATT_VOFF" ] && BATT_VOFF=2800
+sed -i '/^BATT_FULL_ON=/d;/^BATT_FULL=/d' "$CONFIG" 2>/dev/null
 case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
-case "$BATT_FULL_ON" in 0|1) ;; *) BATT_FULL_ON=0 ;; esac
-case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=3000 ;; esac
-[ "$BATT_VOFF" -lt 2700 ] && BATT_VOFF=2700
-[ "$BATT_VOFF" -gt 3350 ] && BATT_VOFF=3350
-case "$BATT_FULL" in ''|*[!0-9]*) BATT_FULL=0 ;; esac
-[ "$BATT_FULL" -gt 0 ] && [ "$BATT_FULL" -lt 4300 ] && BATT_FULL=4300
-[ "$BATT_FULL" -gt 4570 ] && BATT_FULL=4570
+case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
+[ "$BATT_VOFF" -lt 2650 ] && BATT_VOFF=2650
+[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
 if [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ]; then
     log "[提示] 魔改电池仅 ACE2Pro/一加11/一加12 支持, 已重置为关闭"
     BATT_MOD=0
 fi
-if [ "$BATT_FULL_ON" = "1" ] && [ "$BATT_FULL" = "0" ]; then
-    log "[提示] 满充电压开关开启但未设置数值, 已重置为关闭"
-    BATT_FULL_ON=0
-fi
 BATT_ACTIVE=0
-[ "$BATT_LIMIT" = "1" ] || [ "$BATT_UNCAP" = "1" ] || [ "$BATT_MOD" = "1" ] || [ "$BATT_FULL_ON" = "1" ] && BATT_ACTIVE=1
+[ "$BATT_LIMIT" = "1" ] || [ "$BATT_UNCAP" = "1" ] || [ "$BATT_MOD" = "1" ] && BATT_ACTIVE=1
 if [ "$OC_MODE" = "ko" ] && [ "$BATT_ACTIVE" = "1" ]; then
     log "[提示] KO 方案不修改 DTBO, 充电相关功能不可用 (已全部重置为关闭)"
-    BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_FULL_ON=0; BATT_ACTIVE=0
+    BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_ACTIVE=0
 fi
-log "方案: 档位 ${HZ_CHOICE:-0}, 超频方案 $OC_MODE, LTPO禁用 ${LTPO_OFF:-0}, 充电相关: 限流=$BATT_LIMIT 解容=$BATT_UNCAP(${BATT_VOFF}mV) 魔改=$BATT_MOD 满充=$BATT_FULL_ON($([ "$BATT_FULL" = "0" ] && echo "DTBO默认" || echo "${BATT_FULL}mV"))"
+log "方案: 档位 ${HZ_CHOICE:-0}, 超频方案 $OC_MODE, LTPO禁用 ${LTPO_OFF:-0}, 充电相关: 限流=$BATT_LIMIT 解容=$BATT_UNCAP(${BATT_VOFF}mV) 魔改=$BATT_MOD"
 
 NEED_OC=0
 [ "${HZ_CHOICE:-0}" != "0" ] && NEED_OC=1
@@ -377,7 +365,6 @@ PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --workdir $WORK"
 [ "$BATT_LIMIT" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-limit"
 [ "$BATT_UNCAP" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-uncap --batt-voff $BATT_VOFF"
 [ "$BATT_MOD" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-mod"
-[ "$BATT_FULL_ON" = "1" ] && [ "$BATT_FULL" != "0" ] && PATCH_ARGS="$PATCH_ARGS --batt-full $BATT_FULL"
 [ -n "$HZ" ] && PATCH_ARGS="$PATCH_ARGS --hz $HZ"
 [ "$DEVICE" = "gt7p" ] && PATCH_ARGS="$PATCH_ARGS --gt7p"
 [ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2 --min-clone"
