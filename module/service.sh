@@ -12,7 +12,7 @@ log() { echo "$@" >> "$LOG"; echo "[dtbo_oc] $@"; }
 
 mkdir -p "$DATA_DIR" "$WORK" "$WORK/ko"
 : > "$LOG"
-chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" 2>/dev/null
+chmod 755 "$TOOL" "$DTC" "$MODDIR/bin/ratectl_daemon.sh" "$MODDIR/bin/battcap.sh" 2>/dev/null
 
 
 if [ -f "$DATA_DIR/chgcv.pid" ]; then
@@ -59,6 +59,7 @@ BATT_LIMIT=0
 BATT_UNCAP=0
 BATT_VOFF=2800
 BATT_MOD=0
+BATT_150W=0
 OC_MODE=dtbo
 LTPO_OFF=0
 FLASH=1
@@ -265,14 +266,16 @@ fi
 [ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
 [ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
 [ -z "$BATT_MOD" ] && BATT_MOD=0
+[ -z "$BATT_150W" ] && BATT_150W=0
 [ -z "$BATT_VOFF" ] && BATT_VOFF=2800
 sed -i '/^BATT_FULL_ON=/d;/^BATT_FULL=/d' "$CONFIG" 2>/dev/null
 case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
+case "$BATT_150W" in 0|1) ;; *) BATT_150W=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
 [ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
-[ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
+[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
 if [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ]; then
     log "[提示] 魔改电池仅 ACE2Pro/一加11/一加12 支持, 已重置为关闭"
     BATT_MOD=0
@@ -282,10 +285,16 @@ if [ "$BATT_MOD" = "1" ]; then
     BATT_VOFF=2800
 fi
 BATT_ACTIVE=0
-[ "$BATT_LIMIT" = "1" ] || [ "$BATT_UNCAP" = "1" ] || [ "$BATT_MOD" = "1" ] && BATT_ACTIVE=1
+[ "$BATT_LIMIT" = "1" ] || [ "$BATT_UNCAP" = "1" ] || [ "$BATT_MOD" = "1" ] || [ "$BATT_150W" = "1" ] && BATT_ACTIVE=1
 if [ "$OC_MODE" = "ko" ] && [ "$BATT_ACTIVE" = "1" ]; then
     log "[提示] KO 方案不修改 DTBO, 充电相关功能不可用 (已全部重置为关闭)"
-    BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_ACTIVE=0
+    BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_150W=0; BATT_ACTIVE=0
+fi
+if [ "$BATT_MOD" = "1" ]; then
+    sh "$MODDIR/bin/battcap.sh" apply >>"$LOG" 2>&1
+    log "魔改电池: 电池预设容量已静默伪装为 6100mAh"
+else
+    sh "$MODDIR/bin/battcap.sh" revert >>"$LOG" 2>&1
 fi
 log "方案: 档位 ${HZ_CHOICE:-0}, 超频方案 $OC_MODE, LTPO禁用 ${LTPO_OFF:-0}, 充电相关: 限流=$BATT_LIMIT 解容=$BATT_UNCAP(${BATT_VOFF}mV) 魔改=$BATT_MOD"
 
@@ -373,6 +382,7 @@ PATCH_ARGS="--img $STOCK --out $NEW --dtc $DTC --workdir $WORK"
 [ "$BATT_LIMIT" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-limit"
 [ "$BATT_UNCAP" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-uncap --batt-voff $BATT_VOFF"
 [ "$BATT_MOD" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-mod"
+[ "$BATT_150W" = "1" ] && PATCH_ARGS="$PATCH_ARGS --batt-150w"
 [ -n "$HZ" ] && PATCH_ARGS="$PATCH_ARGS --hz $HZ"
 [ "$DEVICE" = "gt7p" ] && PATCH_ARGS="$PATCH_ARGS --gt7p"
 [ "$DEVICE" = "gt7p2" ] && PATCH_ARGS="$PATCH_ARGS --gt7p2 --min-clone"

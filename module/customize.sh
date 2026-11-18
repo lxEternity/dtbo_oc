@@ -24,7 +24,7 @@ ui_print "- 安装"
 TOOL="$MODPATH/arm64/dtbo_oc"
 DTC="$MODPATH/arm64/dtc"
 chmod 755 "$TOOL" "$DTC" \
-    "$MODPATH/service.sh" "$MODPATH/menu.sh" "$MODPATH/post-fs-data.sh" "$MODPATH/bin/webuictl.sh" 2>/dev/null
+    "$MODPATH/service.sh" "$MODPATH/menu.sh" "$MODPATH/post-fs-data.sh" "$MODPATH/bin/webuictl.sh" "$MODPATH/bin/battcap.sh" 2>/dev/null
 mkdir -p "$MODPATH/bin" "$MODPATH/ko" 2>/dev/null
 
 "$TOOL" >/dev/null 2>&1; BINRC=$?
@@ -346,14 +346,14 @@ if [ "$PRESET" != "1" ] && { [ "$HAVE_KEYS" = "1" ] || [ "$HAVE_GETEVENT" = "1" 
             ui_print "- 原厂关机电压: $([ "$BATT_VOFF_DTS" != "0" ] && echo "${BATT_VOFF_DTS}mV" || echo "未识别") (电池类型: ${BATT_KIND_NAME})"
             VOPTS=""; VINIT=7; i=0; v=2450
             [ -n "${BATT_VOFF:-}" ] || BATT_VOFF=2800
-            while [ "$v" -le 2800 ]; do
+            while [ "$v" -le 3150 ]; do
                 VOPTS="${VOPTS:+$VOPTS|}${v}mV"
                 [ "$BATT_VOFF" = "$v" ] && VINIT=$i
                 i=$((i+1)); v=$((v+50))
             done
             ui_choose "关机电压 (1%电量=关机+50mV, 充电中欠压=关机-100mV):" "$VOPTS" "$VINIT"
             BATT_VOFF=2800; i=0; v=2450
-            while [ "$v" -le 2800 ]; do
+            while [ "$v" -le 3150 ]; do
                 [ "$i" = "$SEL" ] && BATT_VOFF=$v
                 i=$((i+1)); v=$((v+50))
             done
@@ -382,7 +382,7 @@ elif [ "$PRESET" != "1" ]; then
     ui_print "! 当前环境不支持按键交互 (无输入设备/权限)"
     ui_print "  使用默认/已有配置, 或在 /sdcard/dtbo_oc.conf 写入预设后重装:"
     ui_print "  HZ_CHOICE=144/165/185/0(不超频), OC_MODE=dtbo/ko"
-    ui_print "  充电相关: BATT_LIMIT=0/1 BATT_UNCAP=0/1 BATT_VOFF=2450-2800"
+    ui_print "  充电相关: BATT_LIMIT=0/1 BATT_UNCAP=0/1 BATT_VOFF=2450-3150"
     ui_print "            BATT_MOD=0/1"
     if [ -z "$CHOICES" ] || [ "$OC_OK" != "1" ]; then HZ_CHOICE=0; fi
 fi
@@ -409,7 +409,7 @@ case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
 [ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
-[ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
+[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
 # 魔改电池预设固定参数: 关机 2800 / 1% 2850 / 满充 4570 (满充由引擎按预设写入)
 if [ "$BATT_MOD" = "1" ]; then
     BATT_UNCAP=1

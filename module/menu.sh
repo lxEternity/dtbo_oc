@@ -25,11 +25,13 @@ IDINFO=$("$TOOL" identify --img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>/dev/n
 DEVICE=$(echo "$IDINFO" | grep '^DEVICE=' | cut -d= -f2)
 DEVNAME=$(echo "$IDINFO" | grep '^NAME=' | cut -d= -f2)
 BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
+BATT_150W_OK=$(echo "$IDINFO" | grep '^BATT_150W=' | cut -d= -f2)
 OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
 BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_STOCK=' | cut -d= -f2)
 BATT_KIND=$(echo "$IDINFO" | grep '^BATT_KIND=' | cut -d= -f2)
 BATT_VMIN=$(echo "$IDINFO" | grep '^BATT_VMIN=' | cut -d= -f2)
 [ -z "$BATT_OK" ] && BATT_OK=0
+[ -z "$BATT_150W_OK" ] && BATT_150W_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
 [ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
 [ -z "$BATT_KIND" ] && BATT_KIND=1
@@ -85,14 +87,17 @@ case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
 [ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
 [ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
 [ -z "$BATT_MOD" ] && BATT_MOD=0
+[ -z "$BATT_150W" ] && BATT_150W=0
 [ -z "$BATT_VOFF" ] && BATT_VOFF=2800
 case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
+case "$BATT_150W" in 0|1) ;; *) BATT_150W=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
 [ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
-[ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
+[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
 [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ] && BATT_MOD=0
+[ "$BATT_150W" = "1" ] && [ "$BATT_150W_OK" != "1" ] && BATT_150W=0
 
 KO_AVAIL=0
 for p in "$DATA_DIR/ko/$DEVICE.ko" "$MODDIR/ko/$DEVICE.ko"; do
@@ -270,7 +275,7 @@ else
 fi
 
 if [ "$OC_MODE" = "ko" ]; then
-    BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0
+    BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_150W=0
     echo " KO 方案不修改 DTBO, 充电相关功能不可用 (已全部关闭)"
 else
     echo ""
@@ -285,14 +290,14 @@ else
     BATT_UNCAP=$([ "$SEL" = "1" ] && echo 1 || echo 0)
     if [ "$BATT_UNCAP" = "1" ]; then
         VOPTS=""; VINIT=7; i=0; v=2450
-        while [ "$v" -le 2800 ]; do
+        while [ "$v" -le 3150 ]; do
             VOPTS="${VOPTS:+$VOPTS|}${v}mV"
             [ "$BATT_VOFF" = "$v" ] && VINIT=$i
             i=$((i+1)); v=$((v+50))
         done
         choose "关机电压 (1%电量=关机+50mV, 充电中欠压=关机-100mV):" "$VOPTS" "$VINIT"
         BATT_VOFF=2800; i=0; v=2450
-        while [ "$v" -le 2800 ]; do
+        while [ "$v" -le 3150 ]; do
             [ "$i" = "$SEL" ] && BATT_VOFF=$v
             i=$((i+1)); v=$((v+50))
         done
@@ -314,6 +319,14 @@ else
         BATT_UNCAP=1
         BATT_VOFF=2800
         echo " 魔改电池预设: 关机电压 2800mV, 1% 电压 2850mV, 满充电压 4570mV"
+    fi
+    if [ "$BATT_150W_OK" = "1" ]; then
+        M_INIT=0; [ "$BATT_150W" = "1" ] && M_INIT=1
+        choose "150W 满血充电 (UFCS 4560mV/15000mA):" "关闭|开启" "$M_INIT"
+        BATT_150W=$([ "$SEL" = "1" ] && echo 1 || echo 0)
+        [ "$BATT_150W" = "1" ] && echo " 注意: 非 150W 充电头勿开启此选项"
+    else
+        BATT_150W=0
     fi
 
 fi
@@ -346,19 +359,21 @@ BATT_N=0
 if [ "$BATT_LIMIT" = "1" ]; then echo "  充电: 解除充电限流"; BATT_N=$((BATT_N+1)); fi
 if [ "$BATT_UNCAP" = "1" ]; then echo "  充电: 电池解容 (关机 ${BATT_VOFF}mV / 1% $((BATT_VOFF+50))mV / 充电中欠压 $((BATT_VOFF-100))mV)"; BATT_N=$((BATT_N+1)); fi
 if [ "$BATT_MOD" = "1" ]; then echo "  充电: 魔改电池 6100mAh"; BATT_N=$((BATT_N+1)); fi
+if [ "$BATT_150W" = "1" ]; then echo "  充电: 150W 满血 (非 150W 充电头勿开)"; BATT_N=$((BATT_N+1)); fi
 [ "$BATT_N" = "0" ] && echo "  充电: 相关功能全部关闭 (原版)"
 echo "=============================================="
 choose "应用方式:" "稍后 (下次开机自动处理)|立即刷入 (重启后生效)" 0
 APPLY=$SEL
 
 if [ -f "$CONFIG" ]; then
-    sed -i "s/^HZ_CHOICE=.*/HZ_CHOICE=$HZ_CHOICE/;s/^BATT_LIMIT=.*/BATT_LIMIT=$BATT_LIMIT/;s/^BATT_UNCAP=.*/BATT_UNCAP=$BATT_UNCAP/;s/^BATT_VOFF=.*/BATT_VOFF=$BATT_VOFF/;s/^BATT_MOD=.*/BATT_MOD=$BATT_MOD/;s/^OC_MODE=.*/OC_MODE=$OC_MODE/;s/^LTPO_OFF=.*/LTPO_OFF=$LTPO_OFF/" "$CONFIG" 2>/dev/null || {
+    sed -i "s/^HZ_CHOICE=.*/HZ_CHOICE=$HZ_CHOICE/;s/^BATT_LIMIT=.*/BATT_LIMIT=$BATT_LIMIT/;s/^BATT_UNCAP=.*/BATT_UNCAP=$BATT_UNCAP/;s/^BATT_VOFF=.*/BATT_VOFF=$BATT_VOFF/;s/^BATT_MOD=.*/BATT_MOD=$BATT_MOD/;s/^BATT_150W=.*/BATT_150W=$BATT_150W/;s/^OC_MODE=.*/OC_MODE=$OC_MODE/;s/^LTPO_OFF=.*/LTPO_OFF=$LTPO_OFF/" "$CONFIG" 2>/dev/null || {
         cat > "$CONFIG" <<EOF
 HZ_CHOICE=$HZ_CHOICE
 BATT_LIMIT=$BATT_LIMIT
 BATT_UNCAP=$BATT_UNCAP
 BATT_VOFF=$BATT_VOFF
 BATT_MOD=$BATT_MOD
+BATT_150W=$BATT_150W
 OC_MODE=$OC_MODE
 LTPO_OFF=$LTPO_OFF
 EOF
@@ -370,6 +385,7 @@ BATT_LIMIT=$BATT_LIMIT
 BATT_UNCAP=$BATT_UNCAP
 BATT_VOFF=$BATT_VOFF
 BATT_MOD=$BATT_MOD
+BATT_150W=$BATT_150W
 OC_MODE=$OC_MODE
 LTPO_OFF=$LTPO_OFF
 FLASH=1

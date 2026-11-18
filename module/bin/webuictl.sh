@@ -429,6 +429,7 @@ if [ -f "$STOCK" ]; then
     DEVNAME=$(echo "$IDINFO" | grep '^NAME=' | cut -d= -f2)
     MAXRATE=$(echo "$IDINFO" | grep '^MAX_RATE=' | cut -d= -f2)
     BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
+    BATT_150W_OK=$(echo "$IDINFO" | grep '^BATT_150W=' | cut -d= -f2)
     OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
     BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_STOCK=' | cut -d= -f2)
     BATT_VOFF_RAW=$(echo "$IDINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
@@ -486,7 +487,7 @@ HZ=""
 OC_MODE=""
 LTPO_OFF=""
 FLASH=""
-BATT_LIMIT=""; BATT_UNCAP=""; BATT_MOD=""; BATT_VOFF=""
+BATT_LIMIT=""; BATT_UNCAP=""; BATT_MOD=""; BATT_150W=""; BATT_VOFF=""
 if [ -f "$CONFIG" ]; then
     . "$CONFIG"
 fi
@@ -500,14 +501,17 @@ case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
 [ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
 [ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
 [ -z "$BATT_MOD" ] && BATT_MOD=0
+[ -z "$BATT_150W" ] && BATT_150W=0
 [ -z "$BATT_VOFF" ] && BATT_VOFF=2800
 case "$BATT_LIMIT" in 0|1) ;; *) BATT_LIMIT=0 ;; esac
 case "$BATT_UNCAP" in 0|1) ;; *) BATT_UNCAP=0 ;; esac
 case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
+case "$BATT_150W" in 0|1) ;; *) BATT_150W=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
 [ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
 [ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
 [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ] && BATT_MOD=0
+[ "$BATT_150W" = "1" ] && [ "$BATT_150W_OK" != "1" ] && BATT_150W=0
 [ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
 [ -z "$BATT_VOFF_RAW" ] && BATT_VOFF_RAW=0
 [ -z "$BATT_KIND" ] && BATT_KIND=1
@@ -730,8 +734,8 @@ emit_status() {
     printf '%s' "$DEVNAME" | json_string
     printf ',"maxrate":"%s","choices":[%s],"plans":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$PLANS_JSON" "$OC_OK" "$BATT_OK"
     printf '"hz":%s,"oc_mode":"%s","ltpo_off":%s,' "$HZ" "$OC_MODE" "$LTPO_OFF"
-    printf '"batt":{"limit":%s,"uncap":%s,"voff":%s,"mod":%s,"voff_dts":%s,"kind":' \
-        "$BATT_LIMIT" "$BATT_UNCAP" "$BATT_VOFF" "$BATT_MOD" "$BATT_VOFF_DTS"
+    printf '"batt":{"limit":%s,"uncap":%s,"voff":%s,"mod":%s,"w150":%s,"cap150":%s,"voff_dts":%s,"kind":' \
+        "$BATT_LIMIT" "$BATT_UNCAP" "$BATT_VOFF" "$BATT_MOD" "$BATT_150W" "${BATT_150W_OK:-0}" "$BATT_VOFF_DTS"
     printf '%s' "$BATT_KIND_NAME" | json_string
     printf ',"vmin":%s,"btype":' "$BATT_VMIN"
     printf '%s' "$BATT_TYPE_NODE" | json_string
@@ -824,8 +828,12 @@ case "${1:-}" in
                     ;;
                 batt_voff)
                     case "$V" in ''|*[!0-9]*) fail "关机电压无效" ;; esac
-                    [ "$V" -ge 2450 ] && [ "$V" -le 2800 ] || fail "关机电压范围 2450-2800mV"
+                    [ "$V" -ge 2450 ] && [ "$V" -le 3150 ] || fail "关机电压范围 2450-3150mV"
                     BATT_VOFF="$V"
+                    ;;
+                batt_150w)
+                    case "$V" in 0|1) BATT_150W="$V" ;; *) fail "150W 充电参数无效" ;; esac
+                    [ "$BATT_150W" = "1" ] && [ "$BATT_150W_OK" != "1" ] && fail "本机型 DT 无 UFCS 150W 策略, 不支持该选项"
                     ;;
                 batt_mod)
                     case "$V" in 0|1) BATT_MOD="$V" ;; *) fail "魔改电池参数无效" ;; esac
@@ -843,7 +851,7 @@ case "${1:-}" in
             MSG="${MSG}未找到 KO ($DEVICE.ko), 侧载到 /data/adb/dtbo_oc/ko/ 后重启生效; "
         fi
         if [ "$OC_MODE" = "ko" ] && batt_active; then
-            BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0
+            BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0; BATT_150W=0
             MSG="KO 方案不修改 DTBO, 充电相关功能已全部关闭; "
         fi
         if [ "$BATT_MOD" = "1" ]; then
@@ -858,6 +866,7 @@ BATT_LIMIT=$BATT_LIMIT
 BATT_UNCAP=$BATT_UNCAP
 BATT_VOFF=$BATT_VOFF
 BATT_MOD=$BATT_MOD
+BATT_150W=$BATT_150W
 OC_MODE=$OC_MODE
 LTPO_OFF=$LTPO_OFF
 FLASH=1
@@ -870,6 +879,7 @@ EOF
             set_config_val BATT_UNCAP "$BATT_UNCAP"
             set_config_val BATT_VOFF "$BATT_VOFF"
             set_config_val BATT_MOD "$BATT_MOD"
+            set_config_val BATT_150W "$BATT_150W"
             set_config_val OC_MODE "$OC_MODE"
             set_config_val LTPO_OFF "$LTPO_OFF"
         fi
@@ -931,7 +941,7 @@ EOF
             fi
         fi
         if [ -f "$CONFIG" ]; then
-            sed -i 's/^HZ_CHOICE=.*/HZ_CHOICE=0/;s/^BATT_LIMIT=.*/BATT_LIMIT=0/;s/^BATT_UNCAP=.*/BATT_UNCAP=0/;s/^BATT_MOD=.*/BATT_MOD=0/;/^BATT_FULL_ON=/d;/^BATT_FULL=/d;s/^LTPO_OFF=.*/LTPO_OFF=0/' "$CONFIG"
+            sed -i 's/^HZ_CHOICE=.*/HZ_CHOICE=0/;s/^BATT_LIMIT=.*/BATT_LIMIT=0/;s/^BATT_UNCAP=.*/BATT_UNCAP=0/;s/^BATT_MOD=.*/BATT_MOD=0/;s/^BATT_150W=.*/BATT_150W=0/;/^BATT_FULL_ON=/d;/^BATT_FULL=/d;s/^LTPO_OFF=.*/LTPO_OFF=0/' "$CONFIG"
         fi
         LTPO_OFF=0
         ltpo_apply 2>/dev/null
