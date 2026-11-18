@@ -2137,6 +2137,11 @@ static int patch_dts(Dts *d, const PatchCfg *cfg, int verbose,
 #define BATT_VOFF_SCAN_MAX 3600u /* 原厂关机电压识别窗口上限 mV */
 #define BATT_1P_OFST     50u     /* 1% 电量电压 = 关机电压 + 50mV */
 #define BATT_UVCHG_OFST  100u    /* 充电中欠压阈值 = 关机电压 - 100mV */
+#define BATT_FULL_MOD    4570u   /* 魔改电池预设满充电压 mV (仅魔改预设, 不可自定义) */
+#define BATT_FULL_MIN    4300u   /* 满充电压识别/安全范围 mV */
+#define BATT_FULL_MAX    4570u
+#define BATT_FULL_BAND   40u     /* 满充表顶段判定带宽 (基准-40 ~ 基准) */
+#define BATT_FULL_SNG    100u    /* 单 cell 满充属性判定带宽 (基准-100 ~ 基准) */
 /* UFCS 策略表 5 元组首 cell 标识 (0x2af8) */
 #define UFCS_TUPLE_TAG  11000u
 
@@ -2150,8 +2155,11 @@ typedef struct {
     int uncap;            /* 电池解容 (自定义关机电压) */
     int mod;              /* 魔改电池 (容量 6100) */
     uint32_t voff;        /* 关机电压 mV (解容) */
+    uint32_t full_mv;     /* 满充电压 mV, 0 = 不改 (魔改预设固定 4570) */
+    uint32_t full_base;   /* DTBO 基准满充 mV (预扫描, 偏移原点) */
     int cap_hits;                    /* 魔改容量替换计数 */
     int voff_hits, voff_ins;         /* 解容: 关机电压替换/插入计数 */
+    int full_hits;                   /* 满充偏移替换计数 */
     int removed_lines;               /* 删除限流节点行数 */
     int strat_hits;         /* oplus 策略表电流位放大计数 (新平台解除限流) */
     int saw_cap;            /* 见到容量属性 (魔改机型指纹) */
@@ -2185,15 +2193,105 @@ static int batt_uncap_kind(const char *pn) {
     return 0;
 }
 
-/* 扫描一个 dts 的原厂关机电压 (识别窗口内取最大) — identify 输出供
-   安装脚本/WebUI 显示参考 */
-static void batt_scan_dts(Dts *d, uint32_t *voff) {
+/* 满充类属性命名判定 (单 cell 与表类通用)
+   qcom 平台满充电压由 vfloat 浮充族控制 (temp/ffc/default_*_vfloat_mv 及
+   *_vfloat_sw_limit / *_vfloat_over_sw_limit 保护窗口): 只改浮充值而不改
+   over_sw_limit 会导致保护阈值低于充电目标, 充满即触发软件过压 → 充电异常,
+   故整族按同一偏移平移; oplus 平台为 full_*_vbat 系列 */
+static int batt_is_full_prop(const char *pn) {
+    return (strstr(pn, "full") && strstr(pn, "vbat")) ||
+           strstr(pn, "vfloat") != NULL ||
+           strstr(pn, "full-pre-ffc-mv") != NULL ||
+           strstr(pn, "full_voltage") != NULL ||
+           strstr(pn, "low_curr_full") != NULL;
+}
+
+/* 单 cell 满充属性偏移判定: 满充类命名且值在 [基准-100, 基准] 带宽内 */
+static int batt_full_single_hit(const char *pn, uint32_t v, uint32_t base) {
+    if (!batt_is_full_prop(pn)) return 0;
+    return v >= BATT_FULL_MIN && v <= BATT_FULL_MAX &&
+           v >= base - BATT_FULL_SNG && v <= base;
+}
+
+/* 表类满充属性电压位偏移: 命中数返回
+   strategy_temp_range_curves 内为 (I,V,f) 三元组 (V 位 = 3k+1);
+   其余 strategy_temp_* 为 5 元组 (SVOOC V 位 = 组首, UFCS = 组首+1),
+   ace5p 系 4 元组表 (阈值,I,I,档位序号) 无电压位, 按指纹跳过;
+   low_curr_full / full_voltage 为 (I,V) 对 (V 位 = 偶下标 1,3,5…)。
+   电流位可达 4.3-4.57A 与满充电压区间重叠, 必须按元组结构定位电压位 */
+static int batt_full_table_shift(const char *pn, uint32_t *cells, int n, int in_lowcurr,
+                                 uint32_t base, int32_t delta) {
+    int hits = 0;
+    int is_strat = !strncmp(pn, "strategy_temp_", 14);
+    if (is_strat && in_lowcurr) {
+        for (int j = 1; j < n; j += 3)
+            if (cells[j] >= base - BATT_FULL_BAND && cells[j] <= base) {
+                cells[j] = (uint32_t)((int32_t)cells[j] + delta); hits++;
+            }
+    } else if (is_strat) {
+        int is_quad = (n % 4 == 0);
+        if (is_quad) {
+            for (int b = 0; b + 4 <= n; b += 4)
+                if (cells[b + 3] >= 0x10 || cells[b + 1] != cells[b + 2]) { is_quad = 0; break; }
+        }
+        if (!is_quad)
+            for (int b = 0; b + 5 <= n; b += 5) {
+                int vp = (cells[b] == UFCS_TUPLE_TAG) ? b + 1 : b;
+                if (cells[vp] >= base - BATT_FULL_BAND && cells[vp] <= base) {
+                    cells[vp] = (uint32_t)((int32_t)cells[vp] + delta); hits++;
+                }
+            }
+    } else {
+        for (int j = 1; j < n; j += 2)
+            if (cells[j] >= base - BATT_FULL_BAND && cells[j] <= base) {
+                cells[j] = (uint32_t)((int32_t)cells[j] + delta); hits++;
+            }
+    }
+    return hits;
+}
+
+/* 扫描一个 dts 的充电参数: 原厂关机电压 (识别窗口内取最大) / 基准满充电压
+   (满充类属性与策略表电压位的最大值) — identify 输出与 cmd_patch 满充偏移
+   原点共用; 电压位定位与 batt_full_table_shift 同一规则 */
+static void batt_scan_dts(Dts *d, uint32_t *voff, uint32_t *full) {
     for (int i = 0; i < d->n; i++) {
         char pn[160]; const char *val;
         if (parse_prop_line(d->lines[i], pn, sizeof(pn), &val) != 2) continue;
         if (batt_uncap_kind(pn) == 1) {
             uint32_t v = parse_u32_from_val(val);
             if (v >= BATT_VOFF_SCAN_MIN && v <= BATT_VOFF_SCAN_MAX && v > *voff) *voff = v;
+        }
+        if (!full) continue;
+        int is_strat = !strncmp(pn, "strategy_temp_", 14);
+        if (!batt_is_full_prop(pn) && !is_strat) continue;
+        uint32_t sc[512];
+        int sn = parse_u32_cells(val, sc, 512);
+        if (sn < 1) continue;
+        if (sn == 1) {
+            if (batt_is_full_prop(pn) &&
+                sc[0] >= BATT_FULL_MIN && sc[0] <= BATT_FULL_MAX && sc[0] > *full) *full = sc[0];
+            continue;
+        }
+        int in_lowcurr = strstr(pn, "strategy_temp_range_curves") != NULL;
+        if (is_strat && !in_lowcurr) {
+            int is_quad = (sn % 4 == 0);
+            if (is_quad) {
+                for (int b = 0; b + 4 <= sn; b += 4)
+                    if (sc[b + 3] >= 0x10 || sc[b + 1] != sc[b + 2]) { is_quad = 0; break; }
+            }
+            if (is_quad) continue;
+        }
+        if (is_strat && in_lowcurr) {
+            for (int j = 1; j < sn; j += 3)
+                if (sc[j] >= BATT_FULL_MIN && sc[j] <= BATT_FULL_MAX && sc[j] > *full) *full = sc[j];
+        } else if (is_strat) {
+            for (int b = 0; b + 5 <= sn; b += 5) {
+                int vp = (sc[b] == UFCS_TUPLE_TAG) ? b + 1 : b;
+                if (sc[vp] >= BATT_FULL_MIN && sc[vp] <= BATT_FULL_MAX && sc[vp] > *full) *full = sc[vp];
+            }
+        } else {
+            for (int j = 1; j < sn; j += 2)
+                if (sc[j] >= BATT_FULL_MIN && sc[j] <= BATT_FULL_MAX && sc[j] > *full) *full = sc[j];
         }
     }
 }
@@ -2252,6 +2350,19 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
     if (!bc->limit && !bc->uncap && !bc->mod) return 0;
     int changed = 0;
     const int del_limit = bc->limit;
+    /* 魔改电池预设满充 4570: 以 DTBO 基准满充为原点整体平移 (保持阶梯步进);
+       与基准相同则不修改 */
+    int full_active = 0;
+    int32_t full_delta = 0;
+    if (bc->full_mv && bc->full_base && bc->full_mv != bc->full_base) {
+        full_active = 1;
+        full_delta = (int32_t)bc->full_mv - (int32_t)bc->full_base;
+        if (bc->full_base < BATT_FULL_MIN || full_delta > 200) {
+            fprintf(stderr, "[BATT][WARN] 满充基准异常 (%umV, 偏移 %+dmV), 已跳过满充修改\n",
+                    bc->full_base, full_delta);
+            full_active = 0; full_delta = 0;
+        }
+    }
     /* 新平台指纹: 含 oplus,chg_shutdown_max_mv 的充电 DT (gt7s/gt8p/ace6t 等)
        解除限流走 oplus 策略表电流位放大; 老平台 (qcom 限流节点删除) 不受影响 */
     int new_plat = 0;
@@ -2313,10 +2424,12 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
             if (close_br && ndepth > 0) { free(nstack[--ndepth]); }
             continue;
         }
-        /* 其余参数修改: 魔改容量 / 新平台策略表电流位放大 */
+        /* 其余参数修改: 魔改容量 / 满充偏移 / 新平台策略表电流位放大 */
         int is_strat = !strncmp(pn, "strategy_temp_", 14);
         int is_icl = !strcmp(pn, "oplus_spec,pd-iclmax-ma") || !strcmp(pn, "oplus_spec,qc-iclmax-ma");
+        int is_fullp = batt_is_full_prop(pn);
         int need_cells = (bc->mod && is_cap) ||
+                         (full_active && (is_fullp || is_strat)) ||
                          (del_limit && new_plat && (is_strat || is_icl));
         if (!need_cells) {
             if (close_br && ndepth > 0) { free(nstack[--ndepth]); }
@@ -2335,6 +2448,23 @@ static int patch_battery_dts(Dts *d, BattCfg *bc, int verbose) {
                 cells[0] = BATT_CAP_MOD; hit++;
                 bc->cap_hits++;
                 if (verbose) fprintf(stderr, "[BATT] %s -> %umAh (魔改电池)\n", pn, BATT_CAP_MOD);
+            }
+        }
+        /* 魔改电池预设满充: 单 cell 按命名+带宽判定, 表类按元组电压位偏移 */
+        if (full_active && (is_fullp || is_strat)) {
+            int fh = 0;
+            if (n == 1 && !is_strat) {
+                if (batt_full_single_hit(pn, cells[0], bc->full_base)) {
+                    cells[0] = (uint32_t)((int32_t)cells[0] + full_delta);
+                    fh = 1;
+                }
+            } else {
+                fh = batt_full_table_shift(pn, cells, n, in_lowcurr, bc->full_base, full_delta);
+            }
+            if (fh) {
+                hit += fh;
+                bc->full_hits += fh;
+                if (verbose) fprintf(stderr, "[BATT] %s 满充电压位偏移 %+dmV x%d\n", pn, full_delta, fh);
             }
         }
         /* 新平台解除限流: oplus 策略表电流位拉满 8000 (绝对目标, 幂等)
@@ -2498,6 +2628,15 @@ static int verify_battery_dts(Dts *d, const BattCfg *bc) {
     if (bc->limit && bad_removed) {
         fprintf(stderr, "[VERIFY][FAIL] 限流节点仍存在 (%d 行)\n", bad_removed);
         return -1;
+    }
+    /* 魔改预设满充上限校验: 电压位扫描结果不得超过 4570mV (电池安全硬上限) */
+    if (bc->mod) {
+        uint32_t vv = 0, ff = 0;
+        batt_scan_dts(d, &vv, &ff);
+        if (ff > BATT_FULL_MAX) {
+            fprintf(stderr, "[VERIFY][FAIL] 满充电压超上限 (%umV > %umV)\n", ff, BATT_FULL_MAX);
+            return -1;
+        }
     }
     return 0;
 }
@@ -2674,6 +2813,7 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     uint32_t max_rate = 0, max_rate_dyn = 0;
     uint32_t max_sa_fhd = 0;   /* gt7p: sa_fhd 家族最高档 (含动态节点, AE035 全动态) */
     uint32_t batt_voff_dts = 0;   /* 充电参数: 原厂关机电压 */
+    uint32_t batt_full_dts = 0;   /* 充电参数: 原厂满充电压 */
     char codename[64] = "";
     char path[4096], dts_path[4096];
     for (uint32_t i = 0; i < img.count; i++) {
@@ -2722,8 +2862,8 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
                 }
             }
         }
-        /* 充电参数扫描: 当前关机电压 / 基准满充电压 (充电相关子页面默认值) */
-        batt_scan_dts(&d, &batt_voff_dts);
+        /* 充电参数扫描: 原厂关机电压 / 原厂满充电压 (充电相关子页面默认值) */
+        batt_scan_dts(&d, &batt_voff_dts, &batt_full_dts);
         TNode *nodes = xmalloc(sizeof(TNode) * MAX_NODES);
         int nn = scan_timing_nodes(&d, nodes, MAX_NODES);
         for (int j = 0; j < nn; j++) {
@@ -2808,6 +2948,7 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     printf("BATT_MOD_CAPABLE=%d\n", batt_mod);
     printf("BATT_VOFF_DTS=%u\n", batt_voff_dts);
     printf("BATT_VOFF_STOCK=%u\n", stock_voff ? stock_voff : batt_voff_dts);
+    printf("BATT_FULL_DTS=%u\n", batt_full_dts);
     printf("BATT_KIND=%d\n", bkind);
     printf("BATT_VMIN=%u\n", vmin);
     printf("OC_CAPABLE=%d\n", oc_capable);
@@ -3139,6 +3280,27 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
         }
     }
 
+    /* 魔改预设满充基准预扫描: 以 DTBO 基准满充为偏移原点 (跨全部 entry 取最大) */
+    if (bc->full_mv) {
+        for (uint32_t i = 0; i < img.count; i++) {
+            if (img.e[i].comp != 0) continue;
+            char p_dtb[4096], p_dts[4096];
+            snprintf(p_dtb, sizeof(p_dtb), "%s/e%u_pre.dtb", workdir, i);
+            snprintf(p_dts, sizeof(p_dts), "%s/e%u_pre.dts", workdir, i);
+            write_file(p_dtb, img.e[i].stored, img.e[i].dt_size);
+            run_dtc(dtc, p_dtb, p_dts, 1);
+            Dts pd; dts_load(&pd, p_dts);
+            uint32_t dv = 0;
+            batt_scan_dts(&pd, &dv, &bc->full_base);
+            dts_free(&pd);
+        }
+        if (!bc->full_base)
+            fprintf(stderr, "[BATT][WARN] 未找到满充基准节点 (基准可能已修改过, 满充偏移跳过)\n");
+        if (bc->full_mv != bc->full_base && verbose)
+            fprintf(stderr, "[BATT] 满充基准 %umV -> 目标 %umV (偏移 %+dmV)\n",
+                    bc->full_base, bc->full_mv, (int)bc->full_mv - (int)bc->full_base);
+    }
+
     for (uint32_t i = 0; i < img.count; i++) {
         repl[i] = NULL; repl_n[i] = 0; replaced[i] = 0;
         DtboEntry *e = &img.e[i];
@@ -3214,6 +3376,8 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
         fprintf(stderr, "[BATT][WARN] 电池解容未找到关机电压节点 (基准可能已修改过, 视为已生效)\n");
     if (bc->limit && bc->removed_lines == 0 && bc->strat_hits == 0)
         fprintf(stderr, "[BATT][WARN] 移除充电限流未找到限流节点 (基准可能已修改过, 视为已生效)\n");
+    if (bc->mod && bc->full_base && bc->full_mv != bc->full_base && bc->full_hits == 0)
+        fprintf(stderr, "[BATT][WARN] 满充电压位未命中 (基准可能已修改过, 视为已生效)\n");
     /* 面板白名单 (ref_clone) 未验证成功必须拦截: 白名单的意义就是只对实机验证过的
        面板做超频克隆, 未命中说明新系统版本面板名已变化, 贸然克隆未经证实的面板
        有不开机风险 — 不放行, 未做任何写入 */
@@ -3221,7 +3385,7 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
         die("面板白名单 (--include-panel %s) 未命中任何面板 — 新系统版本面板名可能已变化, 已拦截刷入 (未做任何写入); 请反馈新镜像以更新白名单",
             cfg->include_panel);
     if (total_added == 0 && total_fixed == 0 &&
-        !(bc->cap_hits || bc->voff_hits || bc->voff_ins || bc->removed_lines || bc->strat_hits)) {
+        !(bc->cap_hits || bc->voff_hits || bc->voff_ins || bc->removed_lines || bc->strat_hits || bc->full_hits)) {
         fprintf(stderr, "[DONE] 没有任何条目被修改 (无需档位或已有档位)\n");
         write_file(out_path, b, n);
         free(b); free(img.e); free(repl); free(repl_n); free(replaced);
@@ -3254,10 +3418,10 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
     uint8_t *out = avb_rebuild(b, n, (int)img.total, payload, off, &out_n);
     write_file(out_path, out, out_n);
     if (bc->limit || bc->uncap || bc->mod) {
-        printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 充电相关: 限流删除x%d/策略电流x%d 解容关机%u替换x%d插入x%d 魔改容量x%d)\n",
+        printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位, 充电相关: 限流删除x%d/策略电流x%d 解容关机%u替换x%d插入x%d 魔改容量x%d 满充%umV偏移x%d)\n",
             out_path, out_n, total_added,
             bc->removed_lines, bc->strat_hits, bc->voff, bc->voff_hits, bc->voff_ins,
-            bc->cap_hits);
+            bc->cap_hits, bc->full_mv, bc->full_hits);
     }
     else
         printf("[DONE] 已生成 %s (%zu 字节, 新增 %d 个档位%s, DTBO total %zu)\n", out_path, out_n, total_added,
@@ -3420,6 +3584,7 @@ int main(int argc, char **argv) {
         bc.uncap = batt_uncap;
         bc.mod = batt_mod;
         bc.voff = batt_voff ? batt_voff : BATT_VOFF_DEF;
+        if (batt_mod) bc.full_mv = BATT_FULL_MOD;   /* 魔改预设满充固定 4570 */
         if (hz) parse_hz_list(hz, &cfg);   /* --hz 可省略: 不超频机型仅电池/充电方案 (如一加11) */
         cfg.margin_low = mlow; cfg.margin_high = mhigh;
         cfg.modify_phy = !no_phy;

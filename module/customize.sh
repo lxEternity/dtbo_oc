@@ -410,6 +410,12 @@ case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
 [ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
 [ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
+# 魔改电池预设固定参数: 关机 2800 / 1% 2850 / 满充 4570 (满充由引擎按预设写入)
+if [ "$BATT_MOD" = "1" ]; then
+    BATT_UNCAP=1
+    BATT_VOFF=2800
+    ui_print "- 魔改电池预设: 关机电压 2800mV, 1% 电压 2850mV, 满充电压 4570mV"
+fi
 [ -z "$OC_MODE" ] && OC_MODE=dtbo
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
 if [ "$OC_MODE" = "ko" ] && [ "$KO_AVAIL" != "1" ]; then

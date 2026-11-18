@@ -310,6 +310,11 @@ else
     else
         BATT_MOD=0
     fi
+    if [ "$BATT_MOD" = "1" ]; then
+        BATT_UNCAP=1
+        BATT_VOFF=2800
+        echo " 魔改电池预设: 关机电压 2800mV, 1% 电压 2850mV, 满充电压 4570mV"
+    fi
 
 fi
 

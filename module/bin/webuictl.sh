@@ -846,6 +846,11 @@ case "${1:-}" in
             BATT_LIMIT=0; BATT_UNCAP=0; BATT_MOD=0
             MSG="KO 方案不修改 DTBO, 充电相关功能已全部关闭; "
         fi
+        if [ "$BATT_MOD" = "1" ]; then
+            BATT_UNCAP=1
+            BATT_VOFF=2800
+            MSG="${MSG}魔改电池预设: 关机2800/1%2850/满充4570; "
+        fi
         if [ ! -f "$CONFIG" ]; then
             cat > "$CONFIG" <<EOF
 HZ_CHOICE=$HZ

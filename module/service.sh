@@ -277,6 +277,10 @@ if [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ]; then
     log "[提示] 魔改电池仅 ACE2Pro/一加11/一加12 支持, 已重置为关闭"
     BATT_MOD=0
 fi
+if [ "$BATT_MOD" = "1" ]; then
+    BATT_UNCAP=1
+    BATT_VOFF=2800
+fi
 BATT_ACTIVE=0
 [ "$BATT_LIMIT" = "1" ] || [ "$BATT_UNCAP" = "1" ] || [ "$BATT_MOD" = "1" ] && BATT_ACTIVE=1
 if [ "$OC_MODE" = "ko" ] && [ "$BATT_ACTIVE" = "1" ]; then
