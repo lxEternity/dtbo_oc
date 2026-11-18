@@ -429,12 +429,9 @@ if [ -f "$STOCK" ]; then
     DEVNAME=$(echo "$IDINFO" | grep '^NAME=' | cut -d= -f2)
     MAXRATE=$(echo "$IDINFO" | grep '^MAX_RATE=' | cut -d= -f2)
     BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
-    BATT_150W_OK=$(echo "$IDINFO" | grep '^BATT_150W=' | cut -d= -f2)
     OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
     BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_STOCK=' | cut -d= -f2)
     BATT_VOFF_RAW=$(echo "$IDINFO" | grep '^BATT_VOFF_DTS=' | cut -d= -f2)
-    BATT_KIND=$(echo "$IDINFO" | grep '^BATT_KIND=' | cut -d= -f2)
-    BATT_VMIN=$(echo "$IDINFO" | grep '^BATT_VMIN=' | cut -d= -f2)
     STOCK_RATE=$(echo "$IDINFO" | grep '^MAX_RATE=' | cut -d= -f2)
 fi
 [ -z "$BATT_OK" ] && BATT_OK=0
@@ -497,7 +494,7 @@ HZ="${HZ_CHOICE:-}"
 [ -z "$LTPO_OFF" ] && LTPO_OFF=0
 case "$OC_MODE" in dtbo|ko) ;; *) OC_MODE=dtbo ;; esac
 case "$LTPO_OFF" in 0|1) ;; *) LTPO_OFF=0 ;; esac
-# 充电相关独立开关 (v2.50 全自定义参数)
+# 充电相关独立开关
 [ -z "$BATT_LIMIT" ] && BATT_LIMIT=0
 [ -z "$BATT_UNCAP" ] && BATT_UNCAP=0
 [ -z "$BATT_MOD" ] && BATT_MOD=0
@@ -509,15 +506,10 @@ case "$BATT_MOD" in 0|1) ;; *) BATT_MOD=0 ;; esac
 case "$BATT_150W" in 0|1) ;; *) BATT_150W=0 ;; esac
 case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
 [ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
-[ "$BATT_VOFF" -gt 2800 ] && BATT_VOFF=2800
+[ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
 [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ] && BATT_MOD=0
-[ "$BATT_150W" = "1" ] && [ "$BATT_150W_OK" != "1" ] && BATT_150W=0
 [ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
 [ -z "$BATT_VOFF_RAW" ] && BATT_VOFF_RAW=0
-[ -z "$BATT_KIND" ] && BATT_KIND=1
-[ -z "$BATT_VMIN" ] && BATT_VMIN=2800
-BATT_KIND_NAME="硅碳"; [ "$BATT_KIND" = "0" ] && BATT_KIND_NAME="纯碳"
-BATT_TYPE_NODE=$(cat /sys/class/oplus_chg/battery/battery_type 2>/dev/null)
 
 KO_FILE=""
 KO_AVAIL=0
@@ -734,12 +726,8 @@ emit_status() {
     printf '%s' "$DEVNAME" | json_string
     printf ',"maxrate":"%s","choices":[%s],"plans":[%s],"oc_capable":%s,"batt_capable":%s,' "$MAXRATE" "$CHOICES_JSON" "$PLANS_JSON" "$OC_OK" "$BATT_OK"
     printf '"hz":%s,"oc_mode":"%s","ltpo_off":%s,' "$HZ" "$OC_MODE" "$LTPO_OFF"
-    printf '"batt":{"limit":%s,"uncap":%s,"voff":%s,"mod":%s,"w150":%s,"cap150":%s,"voff_dts":%s,"kind":' \
-        "$BATT_LIMIT" "$BATT_UNCAP" "$BATT_VOFF" "$BATT_MOD" "$BATT_150W" "${BATT_150W_OK:-0}" "$BATT_VOFF_DTS"
-    printf '%s' "$BATT_KIND_NAME" | json_string
-    printf ',"vmin":%s,"btype":' "$BATT_VMIN"
-    printf '%s' "$BATT_TYPE_NODE" | json_string
-    printf '},'
+    printf '"batt":{"limit":%s,"uncap":%s,"voff":%s,"mod":%s,"w150":%s,"voff_dts":%s},' \
+        "$BATT_LIMIT" "$BATT_UNCAP" "$BATT_VOFF" "$BATT_MOD" "$BATT_150W" "$BATT_VOFF_DTS"
     printf '"oc_active":%s,' "$OC_ACTIVE"
     printf '"rm_ready":%s,' "$([ -s "$DATA_DIR/rates.conf" ] && echo 1 || echo 0)"
     printf '"ko":{"available":%s,"builtin":%s,"loaded":%s,"installed":%s,"vermatch":%s,"file":' "$KO_AVAIL" "$KO_BUILTIN" "$KO_LOADED" "$KO_INSTALLED" "${KO_VERMATCH:-null}"
@@ -833,7 +821,6 @@ case "${1:-}" in
                     ;;
                 batt_150w)
                     case "$V" in 0|1) BATT_150W="$V" ;; *) fail "150W 充电参数无效" ;; esac
-                    [ "$BATT_150W" = "1" ] && [ "$BATT_150W_OK" != "1" ] && fail "本机型 DT 无 UFCS 150W 策略, 不支持该选项"
                     ;;
                 batt_mod)
                     case "$V" in 0|1) BATT_MOD="$V" ;; *) fail "魔改电池参数无效" ;; esac

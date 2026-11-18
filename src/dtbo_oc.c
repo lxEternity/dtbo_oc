@@ -2256,19 +2256,6 @@ static int batt_full_table_shift(const char *pn, uint32_t *cells, int n, int in_
     return hits;
 }
 
-/* 150W 支持判定: DT 内存在 UFCS/PPS 充电策略 (新平台 150W 机型) */
-static int batt_has_150w(Dts *d) {
-    for (int i = 0; i < d->n; i++) {
-        char pn[160]; const char *val;
-        if (parse_prop_line(d->lines[i], pn, sizeof(pn), &val) != 2) continue;
-        if (strstr(pn, "ufcs_strategy_normal_current") ||
-            strstr(pn, "pps_strategy_normal_current") ||
-            strstr(pn, "ufcs_charge_third_strategy") ||
-            strstr(pn, "ufcs_charge_oplus_strategy")) return 1;
-    }
-    return 0;
-}
-
 /* 扫描一个 dts 的充电参数: 原厂关机电压 (识别窗口内取最大) / 基准满充电压
    (满充类属性与策略表电压位的最大值) — identify 输出与 cmd_patch 满充偏移
    原点共用; 电压位定位与 batt_full_table_shift 同一规则 */
@@ -2977,7 +2964,6 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     uint32_t max_sa_fhd = 0;   /* gt7p: sa_fhd 家族最高档 (含动态节点, AE035 全动态) */
     uint32_t batt_voff_dts = 0;   /* 充电参数: 原厂关机电压 */
     uint32_t batt_full_dts = 0;   /* 充电参数: 原厂满充电压 */
-    int batt_150w_cap = 0;        /* 充电参数: 支持 150W 满血 (UFCS 策略存在) */
     char codename[64] = "";
     char path[4096], dts_path[4096];
     for (uint32_t i = 0; i < img.count; i++) {
@@ -3028,7 +3014,6 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
         }
         /* 充电参数扫描: 原厂关机电压 / 原厂满充电压 (充电相关子页面默认值) */
         batt_scan_dts(&d, &batt_voff_dts, &batt_full_dts);
-        if (batt_has_150w(&d)) batt_150w_cap = 1;
         TNode *nodes = xmalloc(sizeof(TNode) * MAX_NODES);
         int nn = scan_timing_nodes(&d, nodes, MAX_NODES);
         for (int j = 0; j < nn; j++) {
@@ -3111,7 +3096,6 @@ static void cmd_identify(const char *img_path, const char *dtc, const char *work
     printf("NAME=%s\n", name);
     printf("MAX_RATE=%u\n", max_rate);
     printf("BATT_MOD_CAPABLE=%d\n", batt_mod);
-    printf("BATT_150W=%d\n", batt_150w_cap);
     printf("BATT_VOFF_DTS=%u\n", batt_voff_dts);
     printf("BATT_VOFF_STOCK=%u\n", stock_voff ? stock_voff : batt_voff_dts);
     printf("BATT_FULL_DTS=%u\n", batt_full_dts);
@@ -3552,7 +3536,10 @@ static int cmd_patch(const char *in_path, const char *out_path, const char *dtc,
             cfg->include_panel);
     if (total_added == 0 && total_fixed == 0 &&
         !(bc->cap_hits || bc->voff_hits || bc->voff_ins || bc->icl_hits || bc->strat_hits || bc->full_hits || bc->w150_hits)) {
-        fprintf(stderr, "[DONE] 没有任何条目被修改 (无需档位或已有档位)\n");
+        if (bc->w150)
+            fprintf(stderr, "[DONE] 本机 DTBO 无 UFCS/PPS 充电节点, 150W 开关对该机型无效 (未做任何修改)\n");
+        else
+            fprintf(stderr, "[DONE] 没有任何条目被修改 (无需档位或已有档位)\n");
         write_file(out_path, b, n);
         free(b); free(img.e); free(repl); free(repl_n); free(replaced);
         if (have_stock) { free(stock_b); free(stock_img.e); }

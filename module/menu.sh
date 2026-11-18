@@ -25,13 +25,11 @@ IDINFO=$("$TOOL" identify --img "$STOCK" --dtc "$DTC" --workdir "$WORK" 2>/dev/n
 DEVICE=$(echo "$IDINFO" | grep '^DEVICE=' | cut -d= -f2)
 DEVNAME=$(echo "$IDINFO" | grep '^NAME=' | cut -d= -f2)
 BATT_OK=$(echo "$IDINFO" | grep '^BATT_MOD_CAPABLE=' | cut -d= -f2)
-BATT_150W_OK=$(echo "$IDINFO" | grep '^BATT_150W=' | cut -d= -f2)
 OC_OK=$(echo "$IDINFO" | grep '^OC_CAPABLE=' | cut -d= -f2)
 BATT_VOFF_DTS=$(echo "$IDINFO" | grep '^BATT_VOFF_STOCK=' | cut -d= -f2)
 BATT_KIND=$(echo "$IDINFO" | grep '^BATT_KIND=' | cut -d= -f2)
 BATT_VMIN=$(echo "$IDINFO" | grep '^BATT_VMIN=' | cut -d= -f2)
 [ -z "$BATT_OK" ] && BATT_OK=0
-[ -z "$BATT_150W_OK" ] && BATT_150W_OK=0
 [ -z "$OC_OK" ] && OC_OK=1
 [ -z "$BATT_VOFF_DTS" ] && BATT_VOFF_DTS=0
 [ -z "$BATT_KIND" ] && BATT_KIND=1
@@ -97,7 +95,6 @@ case "$BATT_VOFF" in ''|*[!0-9]*) BATT_VOFF=2800 ;; esac
 [ "$BATT_VOFF" -lt 2450 ] && BATT_VOFF=2450
 [ "$BATT_VOFF" -gt 3150 ] && BATT_VOFF=3150
 [ "$BATT_MOD" = "1" ] && [ "$BATT_OK" != "1" ] && BATT_MOD=0
-[ "$BATT_150W" = "1" ] && [ "$BATT_150W_OK" != "1" ] && BATT_150W=0
 
 KO_AVAIL=0
 for p in "$DATA_DIR/ko/$DEVICE.ko" "$MODDIR/ko/$DEVICE.ko"; do
@@ -320,14 +317,10 @@ else
         BATT_VOFF=2800
         echo " 魔改电池预设: 关机电压 2800mV, 1% 电压 2850mV, 满充电压 4570mV"
     fi
-    if [ "$BATT_150W_OK" = "1" ]; then
-        M_INIT=0; [ "$BATT_150W" = "1" ] && M_INIT=1
-        choose "150W 满血充电 (UFCS 4560mV/15000mA):" "关闭|开启" "$M_INIT"
-        BATT_150W=$([ "$SEL" = "1" ] && echo 1 || echo 0)
-        [ "$BATT_150W" = "1" ] && echo " 注意: 非 150W 充电头勿开启此选项"
-    else
-        BATT_150W=0
-    fi
+    M_INIT=0; [ "$BATT_150W" = "1" ] && M_INIT=1
+    choose "150W 满血充电 (UFCS 4560mV/15000mA):" "关闭|开启" "$M_INIT"
+    BATT_150W=$([ "$SEL" = "1" ] && echo 1 || echo 0)
+    [ "$BATT_150W" = "1" ] && echo " 注意: 非 150W 充电头勿开启此选项"
 
 fi
 

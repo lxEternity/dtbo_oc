@@ -715,11 +715,7 @@ function chgLoad(b) {
     voff: clamp(Number(nb.voff), 2450, 3150, 2800),
     mod: Number(nb.mod) ? 1 : 0,
     w150: Number(nb.w150) ? 1 : 0,
-    cap150: !!nb.cap150,
     voffDts: Number(nb.voff_dts) || 0,
-    kind: nb.kind || '硅碳',
-    vmin: Number(nb.vmin) || 2800,
-    btype: nb.btype || '',
     capable: !!state?.batt_capable,
   };
   chgDirty = false;
@@ -738,17 +734,13 @@ function chgDraw() {
   $('chg-mod').checked = !!chg.mod;
   $('chg-mod-row').hidden = !chg.capable;
   $('chg-150w').checked = !!chg.w150;
-  $('chg-150w-row').hidden = !chg.cap150;
-  $('chg-150w-warn').hidden = !(chg.cap150 && chg.w150);
+  $('chg-150w-warn').hidden = !chg.w150;
   $('chg-voff-box').hidden = !chg.uncap;
   /* 魔改电池预设固定 关机2800 / 1%2850, 滑条跟随显示并锁定 */
   const voffShown = chg.mod ? 2800 : chg.voff;
   $('chg-voff').value = String(voffShown);
   $('chg-voff').disabled = dis || !!chg.mod;
   $('chg-voff-v').textContent = String(voffShown);
-  $('chg-voff-p1').textContent = String(voffShown + 50);
-  $('chg-batt-kind').textContent = chg.btype ? `${chg.kind} (${chg.btype})` : chg.kind;
-  $('chg-batt-vmin').textContent = String(chg.vmin);
   const on = [];
   if (chg.limit) on.push('解除限流');
   if (chg.uncap) on.push(`解容 ${chg.mod ? 2800 : chg.voff}mV`);
@@ -759,7 +751,7 @@ function chgDraw() {
   $('chg-entry-cap').textContent = koMode ? 'KO 挂载方式下不可用' : capText;
   $('chg-sub').textContent = koMode
     ? '当前为 KO 挂载方式, 充电相关功能不可用'
-    : `原厂关机电压 ${chg.voffDts ? `${chg.voffDts}mV` : '未识别'} · 电池类型 ${chg.btype ? `${chg.kind} (${chg.btype})` : chg.kind}`;
+    : `原厂关机电压 ${chg.voffDts ? `${chg.voffDts}mV` : '未识别'}`;
   $('chg-save').disabled = dis || koMode;
   $('chg-save-label').textContent = chgBusy ? '正在处理…' : (!lic && anyOn ? '需先完成身份验证' : '保存并应用');
 }
